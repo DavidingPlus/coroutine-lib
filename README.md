@@ -1,4 +1,4 @@
-# cmake-project-template
+# coroutine-lib
 
-C/C++ 项目的 CMake 模板。
+协程库。
 

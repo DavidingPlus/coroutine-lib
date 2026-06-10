@@ -3,12 +3,12 @@ from conan.tools.cmake import cmake_layout, CMakeToolchain
 
 
 class ExampleRecipe(ConanFile):
-    name = "cmake-project"
+    name = "coroutine-lib"
     version = "1.2.1"
     description = "C/C++ 项目的 CMake 模板。"
     languages = "C++"
     author = "DavidingPlus"
-    homepage = "https://github.com/DavidingPlus/cmake-project-template"
+    homepage = "https://github.com/DavidingPlus/coroutine-lib"
 
     settings = "os", "compiler", "build_type", "arch"
     generators = "CMakeDeps"
@@ -29,7 +29,7 @@ class ExampleRecipe(ConanFile):
 
     def generate(self):
         tc = CMakeToolchain(self)
-        tc.presets_prefix = "cmake-project"
+        tc.presets_prefix = "coroutine-lib"
         tc.cache_variables["PACKAGE_VERSION"] = self.version
         tc.cache_variables["with_gtest"] = self.options.with_gtest
         tc.generate()
