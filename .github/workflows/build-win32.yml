@@ -1,0 +1,49 @@
+name: Build On Win32
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Conan
+      run: |
+
+        pip install conan==2.6.0
+
+        conan profile detect
+
+    - name: Configure CMake
+      working-directory: ${{github.workspace}}
+      run: |
+
+        conan install . --build=missing
+
+        cmake --preset cmake-project-default
+
+    - name: Build Targets
+      working-directory: ${{github.workspace}}
+      run: cmake --build --preset cmake-project-release
+
+    - name: Install Targets
+      working-directory: ${{github.workspace}}
+      run: |
+
+        cmake --build --preset cmake-project-release -t install
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: install
+        path: build/install
+        include-hidden-files: true
+        if-no-files-found: error
