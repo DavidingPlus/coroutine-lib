@@ -39,7 +39,7 @@ public:
 
     void reset(std::function<void()> cb);   // 重置协程状态和⼊⼝函数，复⽤栈空间，不重新创建栈。
     void resume();                          // 恢复协程执行。
-    void yield();                           // 将执行全还给调度协程。
+    void yield();                           // 将执行全还给调度协程或者主协程。
     uint64_t getId() const { return m_id; } // 获取唯一标识。
     State getState() const { return m_state; }
 
