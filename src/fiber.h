@@ -11,12 +11,14 @@
 #include <mutex>
 
 
+// std::enable_shared_from_this<T> 允许一个对象在成员函数内部安全获得指向自己的 std::shared_ptr。
 class Fiber : public std::enable_shared_from_this<Fiber>
 {
 
 public:
 
-    enum State // 定义协程的状态，属于协程的上下文切换的时候，需要被保存。
+    // 定义协程的状态，属于协程的上下文切换的时候，需要被保存。
+    enum State
     {
         READY = 0,
         RUNNING,
