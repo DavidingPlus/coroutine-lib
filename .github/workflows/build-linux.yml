@@ -16,35 +16,27 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install Conan
-      run: |
+    - name: Setup XMake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: latest
 
-        pip install conan==2.6.0
-
-        conan profile detect
-
-    - name: Configure CMake
+    - name: Configure XMake
       working-directory: ${{github.workspace}}
-      run: |
-
-        conan install . --build=missing
-
-        cmake --preset coroutine-lib-release
+      run: xmake f -m release
 
     - name: Build Targets
       working-directory: ${{github.workspace}}
-      run: cmake --build --preset coroutine-lib-release
+      run: xmake build
 
     - name: Install Targets
       working-directory: ${{github.workspace}}
-      run: |
-
-        cmake --build --preset coroutine-lib-release -t install
+      run: xmake install
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: install
-        path: build/Release/install
+        path: build/linux/x86_64/release/install
         include-hidden-files: true
         if-no-files-found: error
