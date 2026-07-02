@@ -37,6 +37,7 @@ Fiber::Fiber()
 
 // 作用：创建一个新协程，初始化回调函数，栈的大小和状态。分配栈空间，并通过 make 修改上下文当 set 或 swap 激活 ucontext_t  m_ctx 上下文时候会执行 make 第二个参数的函数。
 Fiber::Fiber(std::function<void()> cb, size_t stacksize, bool runInScheduler)
+    : m_cb(cb), m_runInScheduler(runInScheduler)
 {
     m_state = READY; // 初始化状态。
 
