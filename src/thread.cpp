@@ -12,6 +12,7 @@ static thread_local std::string t_threadName = "UNKNOWN"; // 当前线程的名�
 
 
 Thread::Thread(std::function<void()> cb, const std::string &name)
+    : m_cb(cb), m_name(name)
 {
     int res = pthread_create(&m_thread, nullptr, &Thread::run, this); // 这里需要注意的是 this 是传递给 run 函数进行转换的。
     if (res)
@@ -128,7 +129,14 @@ void *Thread::run(void *arg)
     thread->m_semaphore.signal();
 
     // 真正执行函数的地方。
-    cb();
+    try
+    {
+        cb();
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << e.what() << std::endl;
+    }
 
 
     return 0;

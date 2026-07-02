@@ -22,4 +22,9 @@ target("tests")
         realtime_output = true,
         files = {"testrun/*.cpp"}
     })
+
+    add_tests("coroutine-lib", {
+        realtime_output = true,
+        files = {"coroutine-lib/*.cpp"}
+    })
 target_end()
