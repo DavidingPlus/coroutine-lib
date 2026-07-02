@@ -4,22 +4,22 @@
 
 
 // 正在运行的协程。
-static thread_local Fiber *runningFiber = nullptr;
+static thread_local Fiber *t_fiber = nullptr;
 // 主协程。
-static thread_local std::shared_ptr<Fiber> mainFiber = nullptr;
+static thread_local std::shared_ptr<Fiber> t_threadFiber = nullptr;
 // 调度协程。
-static thread_local Fiber *schedulerFiber = nullptr;
+static thread_local Fiber *t_schedulerFiber = nullptr;
 
 // 全局协程 ID 计数器。
-static std::atomic<uint64_t> fiberId{0};
+static std::atomic<uint64_t> s_fiberId{0};
 // 全局活跃协程数量计数器。
-static std::atomic<uint64_t> activeFiberCount{0};
+static std::atomic<uint64_t> s_fiberCount{0};
 
 
 // 作用：创建主协程。设置状态，初始化上下文，并分配 ID。
 Fiber::Fiber()
 {
-    SetThis(this);     // 在 getThis 中使用了无参的 Fiber 来构造 runningFiber。
+    SetThis(this);     // 在 getThis 中使用了无参的 Fiber 来构造 t_fiber。
     m_state = RUNNING; // 设置协程的状态为可运行。
 
     if (getcontext(&m_ctx))
@@ -29,8 +29,8 @@ Fiber::Fiber()
         pthread_exit(nullptr);
     }
 
-    m_id = fiberId++;   // 分配 id，协程 id 从 0 开始，用完加 1。
-    ++activeFiberCount; // 活跃的协程数量 +1。
+    m_id = s_fiberId++; // 分配 id，协程 id 从 0 开始，用完加 1。
+    ++s_fiberCount;     // 活跃的协程数量 +1。
 
     std::cout << "Fiber(): main id = " << m_id << std::endl;
 }
@@ -56,15 +56,15 @@ Fiber::Fiber(std::function<void()> cb, size_t stacksize, bool runInScheduler)
     m_ctx.uc_stack.ss_size = m_stackSize;
     makecontext(&m_ctx, &Fiber::MainFunc, 0);
 
-    m_id = fiberId++;   // 分配 id，协程 id 从 0 开始，用完加 1。
-    ++activeFiberCount; // 活跃的协程数量 +1。
+    m_id = s_fiberId++; // 分配 id，协程 id 从 0 开始，用完加 1。
+    ++s_fiberCount;     // 活跃的协程数量 +1。
 
     std::cout << "Fiber(): child id = " << m_id << std::endl;
 }
 
 Fiber::~Fiber()
 {
-    --activeFiberCount; // 减少活跃协程计数器。
+    --s_fiberCount; // 减少活跃协程计数器。
 
     if (m_stack)
     {
@@ -108,9 +108,9 @@ void Fiber::resume()
     if (m_runInScheduler)
     {
         SetThis(this); // 切换为目前工作的协程。
-        if (swapcontext(&(schedulerFiber->m_ctx), &m_ctx))
+        if (swapcontext(&(t_schedulerFiber->m_ctx), &m_ctx))
         {
-            std::cerr << "resume() to schedulerFiber failed\n";
+            std::cerr << "resume() to t_schedulerFiber failed\n";
 
             pthread_exit(nullptr);
         }
@@ -118,10 +118,10 @@ void Fiber::resume()
     else
     {
         SetThis(this);
-        if (swapcontext(&(mainFiber->m_ctx), &m_ctx))
+        if (swapcontext(&(t_threadFiber->m_ctx), &m_ctx))
         {
 
-            std::cerr << "resume() to schedulerFiber failed\n";
+            std::cerr << "resume() to t_schedulerFiber failed\n";
 
             pthread_exit(nullptr);
         }
@@ -136,20 +136,20 @@ void Fiber::yield()
 
     if (m_runInScheduler)
     {
-        SetThis(schedulerFiber);
-        if (swapcontext(&m_ctx, &(schedulerFiber->m_ctx)))
+        SetThis(t_schedulerFiber);
+        if (swapcontext(&m_ctx, &(t_schedulerFiber->m_ctx)))
         {
-            std::cerr << "yield() to to schedulerFiber failed\n";
+            std::cerr << "yield() to to t_schedulerFiber failed\n";
 
             pthread_exit(nullptr);
         }
     }
     else
     {
-        SetThis(mainFiber.get());
-        if (swapcontext(&m_ctx, &(mainFiber->m_ctx)))
+        SetThis(t_threadFiber.get());
+        if (swapcontext(&m_ctx, &(t_threadFiber->m_ctx)))
         {
-            std::cerr << "yield() to mainFiber failed\n";
+            std::cerr << "yield() to t_threadFiber failed\n";
 
             pthread_exit(nullptr);
         }
@@ -158,32 +158,32 @@ void Fiber::yield()
 
 void Fiber::SetThis(Fiber *f)
 {
-    runningFiber = f;
+    t_fiber = f;
 }
 
 std::shared_ptr<Fiber> Fiber::GetThis()
 {
     // 如果有正在运行的协程就直接返回。
-    if (runningFiber) return runningFiber->shared_from_this();
+    if (t_fiber) return t_fiber->shared_from_this();
 
     // 如果没有就返回主协程。
-    mainFiber = std::shared_ptr<Fiber>(new Fiber()); // 不能用 mainFiber = std::make_shared<Fiber>()，因为 Fiber() 的默认构造是私有的，不能从外部调用。
-    schedulerFiber = mainFiber.get();                // 除非主动设置，主协程默认为调度协程。
+    t_threadFiber = std::shared_ptr<Fiber>(new Fiber()); // 不能用 t_threadFiber = std::make_shared<Fiber>()，因为 Fiber() 的默认构造是私有的，不能从外部调用。
+    t_schedulerFiber = t_threadFiber.get();              // 除非主动设置，主协程默认为调度协程。
 
-    assert(runningFiber == mainFiber.get()); // 用于判断，runningFiber 是否等于 main_fiber。是继续执行，否则程序终止。
+    assert(t_fiber == t_threadFiber.get()); // 用于判断，t_fiber 是否等于 main_fiber。是继续执行，否则程序终止。
 
 
-    return runningFiber->shared_from_this();
+    return t_fiber->shared_from_this();
 }
 
 void Fiber::SetSchedulerFiber(Fiber *f)
 {
-    schedulerFiber = f;
+    t_schedulerFiber = f;
 }
 
 uint64_t Fiber::GetFiberId()
 {
-    if (runningFiber) return runningFiber->getId();
+    if (t_fiber) return t_fiber->getId();
 
     return (uint64_t)-1; // 返回 -1，并且是 (uint64_t)-1 那就会转换成 UINT64_MAX，用来表示错误的情况。
 }
