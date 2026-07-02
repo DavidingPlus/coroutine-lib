@@ -13,6 +13,8 @@ public:
     // 信号量初始化为 0。
     explicit Semaphore(int count = 0) : m_count(count) {}
 
+    virtual ~Semaphore() = default;
+
     // P 操作
     void wait();
 
