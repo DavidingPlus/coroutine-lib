@@ -29,7 +29,7 @@ Fiber::Fiber()
         pthread_exit(nullptr);
     }
 
-    m_id = s_fiberId++; // 分配 id，协程 id 从 0 开始，用完加 1。
+    m_id = ++s_fiberId; // 分配 id，协程 id 从 0 开始，用完加 1。
     ++s_fiberCount;     // 活跃的协程数量 +1。
 
     std::cout << "Fiber(): main id = " << m_id << std::endl;
@@ -55,9 +55,11 @@ Fiber::Fiber(std::function<void()> cb, size_t stacksize, bool runInScheduler)
     m_ctx.uc_link = nullptr; // 这里因为没有设置了后继所以在运行完 mainfunc 后协程退出，会调用一次 yield 返回主协程。
     m_ctx.uc_stack.ss_sp = m_stack;
     m_ctx.uc_stack.ss_size = m_stackSize;
+
+    // 对工作协程而言，只要切换到这个协程，就会从 MainFunc 函数开始执行。
     makecontext(&m_ctx, &Fiber::MainFunc, 0);
 
-    m_id = s_fiberId++; // 分配 id，协程 id 从 0 开始，用完加 1。
+    m_id = ++s_fiberId; // 分配 id，协程 id 从 0 开始，用完加 1。
     ++s_fiberCount;     // 活跃的协程数量 +1。
 
     std::cout << "Fiber(): child id = " << m_id << std::endl;
@@ -108,7 +110,9 @@ void Fiber::resume()
     // 这里的切换就相当于非对称协程函数那个当 a 执行完成后会将执行权交给 b。
     if (m_runInScheduler)
     {
-        SetThis(this); // 切换为目前工作的协程。
+        // 切换为目前工作的协程。
+        SetThis(this);
+        // 保存调度或者主 Fiber 现场，跳到工作 Fiber。
         if (swapcontext(&(t_schedulerFiber->m_ctx), &m_ctx))
         {
             std::cerr << "resume() to t_schedulerFiber failed\n";
@@ -138,6 +142,7 @@ void Fiber::yield()
     if (m_runInScheduler)
     {
         SetThis(t_schedulerFiber);
+        // 保存工作 Fiber 现场。恢复调度或者主 Fiber 现场。
         if (swapcontext(&m_ctx, &(t_schedulerFiber->m_ctx)))
         {
             std::cerr << "yield() to to t_schedulerFiber failed\n";
@@ -199,7 +204,13 @@ void Fiber::MainFunc()
     cur->m_state = TERMINATE;
 
     // 运行完毕 -> 让出执行权。
+    // std::shared_ptr 的 get() 函数只是拿到对象地址，不增加引用计数。
     auto rawPtr = cur.get();
-    cur.reset(); // 这里留意一个细节，就是重置的 cb 回调函数就希望它指向 nullptr 因为方便其他线程再次调用这个协程对象。
+    // 这里只释放 rawPtr 这个临时 shared_ptr，并不会销毁对象，因为 Scheduler 的任务列表里还有一个 shared_ptr 指向这个 Fiber。这个协程对象可能会被其他线程调度，因此不能直接销毁对象。
+    // std::shared_ptr 的 reset() 函数做了两件事情，引用计数减 1，自己变成空指针，因此对象不一定销毁。
+    cur.reset();
+
+    // 提前释放 MainFunc 中持有的 std::shared_ptr，避免协程 yield 后不再返回，导致引用计数无法减少。
+    // 由于 Scheduler 仍持有该 Fiber，因此对象不会立即析构，使用提前保存的裸指针完成最后一次 yield 即可。
     rawPtr->yield();
 }

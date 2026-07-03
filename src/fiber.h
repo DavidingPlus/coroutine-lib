@@ -31,7 +31,7 @@ private:
 
 public:
 
-    Fiber(std::function<void()> cb, size_t stacksize = 0, bool runInScheduler = true); // 用于创建指定回调函数、栈大小和 runInScheduler 本协程是否参与调度器调度，默认为true。
+    Fiber(std::function<void()> cb, size_t stacksize = 0, bool runInScheduler = true); // 用于创建指定回调函数、栈大小和 runInScheduler 本协程是否参与调度器调度，默认为 true。stacksize 传入 0 代表自动分配栈空间大小。
 
     virtual ~Fiber();
 
@@ -46,7 +46,7 @@ public:
 public:
 
     static void SetThis(Fiber *f);           // 设置当前运行的协程。
-    static std::shared_ptr<Fiber> GetThis(); // 获取当前运行的协程的 shared_ptr 实例。
+    static std::shared_ptr<Fiber> GetThis(); // 获取当前运行的协程的 shared_ptr 实例。如果没有，就返回主协程或调度协程。
     static void SetSchedulerFiber(Fiber *f); // 设置调度协程，默认主协程。
     static uint64_t GetFiberId();            // 获取当前运行的协程的 ID。
     static void MainFunc();                  // 协程的主函数，入口点。
