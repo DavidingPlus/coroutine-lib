@@ -1,5 +1,7 @@
 #include "scheduler.h"
 
+#include "config.h"
+
 #include <cassert>
 #include <chrono>
 
@@ -47,7 +49,7 @@ Scheduler::Scheduler(size_t threads, bool useCaller, const std::string &name)
 
     m_threadCount = threads; // 将剩余的线程数量（即总线程数量减去是否使用调用者线程）赋值给 m_threadCount。
 
-    std::cout << "Scheduler::Scheduler() success\n";
+    if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::Scheduler() success\n";
 }
 
 Scheduler::~Scheduler()
@@ -60,7 +62,7 @@ Scheduler::~Scheduler()
         t_scheduler = nullptr; // 将其设置为 nullptr 防止悬空指针。
     }
 
-    std::cout << "Scheduler::~Scheduler() success\n";
+    if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::~Scheduler() success\n";
 }
 
 void Scheduler::start()
@@ -85,12 +87,12 @@ void Scheduler::start()
         m_threadIds.push_back(m_threads[i]->getId());
     }
 
-    std::cout << "Scheduler::start() success\n";
+    if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::start() success\n";
 }
 
 void Scheduler::stop()
 {
-    std::cout << "Schedule::stop() starts in thread: " << Thread::GetThreadId() << std::endl;
+    if (COROUTINE_CONFIG_DEBUG) std::cout << "Schedule::stop() starts in thread: " << Thread::GetThreadId() << std::endl;
 
     // 1. 判断是否已经可以停止。
     if (stopping()) return;
@@ -113,7 +115,7 @@ void Scheduler::stop()
     {
         m_schedulerFiber->resume(); // 开始任务调度。
 
-        std::cout << "m_schedulerFiber ends in thread:" << Thread::GetThreadId() << std::endl;
+        if (COROUTINE_CONFIG_DEBUG) std::cout << "m_schedulerFiber ends in thread:" << Thread::GetThreadId() << std::endl;
     }
     // 获取此时的线程通过 swap 不会增加引用计数的方式加入到 thrs，方便下面的 join 保持线程正常退出。
     std::vector<std::shared_ptr<Thread>> thrs;
@@ -125,7 +127,7 @@ void Scheduler::stop()
 
     for (auto &i : thrs) i->join();
 
-    std::cout << "Schedule::stop() ends in thread:" << Thread::GetThreadId() << std::endl;
+    if (COROUTINE_CONFIG_DEBUG) std::cout << "Schedule::stop() ends in thread:" << Thread::GetThreadId() << std::endl;
 }
 
 void Scheduler::tickle()
@@ -136,7 +138,7 @@ void Scheduler::tickle()
 void Scheduler::run()
 {
     int threadId = Thread::GetThreadId(); // 获取当前线程的 ID。
-    std::cout << "Schedule::run() starts in thread: " << threadId << std::endl;
+    if (COROUTINE_CONFIG_DEBUG) std::cout << "Schedule::run() starts in thread: " << threadId << std::endl;
 
     // set_hook_enable(true);
 
@@ -220,7 +222,7 @@ void Scheduler::run()
             if (Fiber::TERMINATE == idleFiber->getState())
             {
                 // 如果调度器没有调度任务，那么 idle 协程回不断的 resume/yield，不会结束进入一个忙等待，如果 idle 协程结束了，一定是调度器停止了，直到有任务才执行上面的 if/else，在这里 idleFiber 就是不断的和主协程进行交互的子协程。
-                std::cout << "Schedule::run() ends in thread: " << threadId << std::endl;
+                if (COROUTINE_CONFIG_DEBUG) std::cout << "Schedule::run() ends in thread: " << threadId << std::endl;
 
                 break;
             }
@@ -236,7 +238,7 @@ void Scheduler::idle()
 {
     while (!stopping())
     {
-        std::cout << "Scheduler::idle(), sleeping in thread: " << Thread::GetThreadId() << std::endl;
+        if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::idle(), sleeping in thread: " << Thread::GetThreadId() << std::endl;
 
         std::this_thread::sleep_for(std::chrono::seconds(1)); // 降低空闲协程在无任务时对 cpu 占用率，避免空转浪费资源。
 

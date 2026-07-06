@@ -12,6 +12,11 @@ set_languages("cxx17")
 
 add_rules("mode.debug", "mode.release")
 
+set_configdir("$(builddir)/config/")
+add_configfiles("src/config.h.in")
+
+add_includedirs("$(builddir)/config/")
+
 
 option("with_gtest")
     set_default(false)
