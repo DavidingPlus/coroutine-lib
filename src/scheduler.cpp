@@ -37,6 +37,9 @@ Scheduler::Scheduler(size_t threads, bool useCaller, const std::string &name)
         // 创建主协程。
         Fiber::GetThis();
 
+        // 设置调度协程对象。主线程创建出来的工作线程的线程局部变量 t_scheduler 是两个值。useCaller 为 true 的情况下，t_scheduler 为 this，为 false 的情况，为 nullptr。
+        SetThis();
+
         // 创建调度协程。调度协程显然是 false -> 协程退出后将返回主协程。
         // void Scheduler::run() 等价于 void Scheduler::run(Scheduler* this)，成员函数必须知道作用于哪个对象，因此绑定 this 进去，std::bind(&Scheduler::run, this)。
         m_schedulerFiber.reset(new Fiber(std::bind(&Scheduler::run, this), 0, false));
@@ -50,7 +53,7 @@ Scheduler::Scheduler(size_t threads, bool useCaller, const std::string &name)
 
     m_threadCount = threads; // 将剩余的线程数量（即总线程数量减去是否使用调用者线程）赋值给 m_threadCount。
 
-    if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::Scheduler() success\n";
+    if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::Scheduler() success" << std::endl;
 }
 
 Scheduler::~Scheduler()
@@ -60,7 +63,7 @@ Scheduler::~Scheduler()
     // 获取调度器的对象。
     if (this == GetThis()) t_scheduler = nullptr; // 将其设置为 nullptr 防止悬空指针。
 
-    if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::~Scheduler() success\n";
+    if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::~Scheduler() success" << std::endl;
 }
 
 void Scheduler::start()
@@ -85,7 +88,7 @@ void Scheduler::start()
         m_threadIds.emplace_back(m_threads[i]->getId());
     }
 
-    if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::start() success\n";
+    if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::start() success" << std::endl;
 }
 
 void Scheduler::stop()
@@ -102,6 +105,12 @@ void Scheduler::stop()
     // 下面的 this 指针对应的 Scheduler 对象是主线程最开始创建调度器的那个 Scheduler 对象。调用 Scheduler::stop() 函数的是一定主线程，例如 main() 函数里面！
     // m_useCaller 为 true，Caller 线程参与调度，因此当前线程绑定的 Scheduler(GetThis()) 就是当前 Scheduler 对象(this)，两者应相等。
     // m_useCaller 为 false，Caller 线程不参与协程调度，它的 t_scheduler 是 nullptr。Worker 线程负责自己的协程调度，它的 t_scheduler 和 this 指针不同。
+    if (COROUTINE_CONFIG_DEBUG)
+    {
+        std::cout << "this: " << this << '\n'
+                  << "GetThis(): " << GetThis() << std::endl;
+    }
+
     m_useCaller ? assert(this == GetThis()) : assert(this != GetThis());
 
     // 3. 唤醒所有睡眠中的线程。
@@ -115,7 +124,7 @@ void Scheduler::stop()
     {
         m_schedulerFiber->resume(); // 开始任务调度。
 
-        if (COROUTINE_CONFIG_DEBUG) std::cout << "m_schedulerFiber ends in thread:" << Thread::GetThreadId() << std::endl;
+        if (COROUTINE_CONFIG_DEBUG) std::cout << "m_schedulerFiber ends in thread: " << Thread::GetThreadId() << std::endl;
     }
 
     // 获取此时的线程通过 swap 不会增加引用计数的方式加入到 thrs，方便下面的 join 保持线程正常退出。
@@ -128,7 +137,7 @@ void Scheduler::stop()
 
     for (auto &i : thrs) i->join();
 
-    if (COROUTINE_CONFIG_DEBUG) std::cout << "Schedule::stop() ends in thread:" << Thread::GetThreadId() << std::endl;
+    if (COROUTINE_CONFIG_DEBUG) std::cout << "Schedule::stop() ends in thread: " << Thread::GetThreadId() << std::endl;
 }
 
 void Scheduler::tickle()
@@ -144,7 +153,8 @@ void Scheduler::run()
 
     // set_hook_enable(true);
 
-    SetThis(); // 设置调度器对象。
+    // 设置调度器对象。
+    SetThis();
 
     // 新创建的工作线程刚启动时还没有主协程，需要先创建线程的 Main Fiber。后续任务协程会以 Scheduler Fiber（Caller）或 Main Fiber（Worker）作为返回点进行切换。注意：这里只创建 Main Fiber，不会创建 Scheduler Fiber。Scheduler Fiber 仅在 useCaller=true 时，为 Caller 线程额外创建。
     if (threadId != m_rootThread) Fiber::GetThis();
