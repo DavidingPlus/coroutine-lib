@@ -64,7 +64,7 @@ private:
     ucontext_t m_ctx;           // 协程的上下文。
     void *m_stack = nullptr;    // 协程栈的指针。
     std::function<void()> m_cb; // 协程的回调函数。
-    bool m_runInScheduler;      // 标志是否将执行器交给调度协程。
+    bool m_runInScheduler;      // 用于标记该协程是否受调度器管理。
 };
 
 

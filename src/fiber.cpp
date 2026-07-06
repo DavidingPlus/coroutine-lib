@@ -35,7 +35,7 @@ Fiber::Fiber()
     std::cout << "Fiber(): main id = " << m_id << std::endl;
 }
 
-// 作用：创建一个新协程，初始化回调函数，栈的大小和状态。分配栈空间，并通过 make 修改上下文当 set 或 swap 激活 ucontext_t  m_ctx 上下文时候会执行 make 第二个参数的函数。
+// 作用：创建一个新协程，初始化回调函数，栈的大小和状态。分配栈空间，并通过 make 修改上下文当 set 或 swap 激活 ucontext_t，m_ctx 上下文时候会执行 make 第二个参数的函数。
 Fiber::Fiber(std::function<void()> cb, size_t stacksize, bool runInScheduler)
     : m_cb(cb), m_runInScheduler(runInScheduler)
 {
@@ -100,7 +100,7 @@ void Fiber::reset(std::function<void()> cb)
     makecontext(&m_ctx, &Fiber::MainFunc, 0);
 }
 
-// 作用：将协程的状态设置为 running，并恢复协程的执行。如果 m_runInScheduler 为 true，则将上下文切换到调度协程；否则，切换到主线程的协程。
+// 作用：将协程的状态设置为 running，并恢复协程的执行。如果 m_runInScheduler 为 true，代表受调度协程管理，从调度协程切换到工作协程。否则代表受用户自己管理，只能从主协程切换到工作协程。
 void Fiber::resume()
 {
     assert(READY == m_state);
@@ -113,6 +113,7 @@ void Fiber::resume()
         // 切换为目前工作的协程。
         SetThis(this);
         // 保存调度或者主 Fiber 现场，跳到工作 Fiber。
+        // swapcontext(旧上下文, 新上下文);
         if (swapcontext(&(t_schedulerFiber->m_ctx), &m_ctx))
         {
             std::cerr << "resume() to t_schedulerFiber failed\n";

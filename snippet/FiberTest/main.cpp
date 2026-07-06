@@ -20,6 +20,7 @@ public:
 
         std::shared_ptr<Fiber> task;
 
+        // 先来先服务。
         auto it = m_tasks.begin();
         while (m_tasks.end() != it)
         {
