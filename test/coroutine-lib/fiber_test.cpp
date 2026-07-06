@@ -2,6 +2,8 @@
 
 #include "fiber.h"
 
+#include "config.h"
+
 
 // 主协程（Main Fiber）由 Fiber::GetThis() 首次调用时创建，并由线程局部变量。thread_local std::shared_ptr<Fiber> t_threadFiber 持有。由于 thread_local 对象的生命周期贯穿整个线程，因此即使单元测试已经结束，主协程也不会立即析构。当测试程序退出、线程结束时，t_threadFiber 才会析构，shared_ptr 引用计数归零，最终触发主协程的析构函数，因此会在所有测试输出完成后看到如下输出，这反而是正常现象。
 // [----------] Global test environment tear-down
@@ -152,5 +154,6 @@ TEST(FiberTest, ResumeAfterTerminate)
     // 已经结束的协程不能再次 resume()，需要 reset() 才能再次运行。
     fiber->resume();
 
-    ASSERT_DEATH({ fiber->resume(); }, "");
+    // Release 模式下，assert(xxx) 宏会被定义为 NDEBUG，该部分的代码都会被优化掉，因此下面这行代码只在 Debug 下测试。
+    if (COROUTINE_CONFIG_DEBUG) ASSERT_DEATH({ fiber->resume(); }, "");
 }
