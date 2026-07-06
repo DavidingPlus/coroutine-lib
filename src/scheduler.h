@@ -66,8 +66,11 @@ public:
     }
 
 
-    // 启动线程池，启动调度器。
+    // 启动线程池，启动调度器。作用是创建额外的工作线程，并让它们进入 Scheduler::run() 调度循环。
+    // 当 use_caller=true 时，Caller 线程本身就是一个工作线程，它会通过调度协程进入 run()，因此 start() 只需要创建剩余的工作线程（如果 threads==1，则无需创建任何新线程）。
+    // 当 use_caller=false 时，Caller 线程不参与协程调度，因此所有调度工作都必须由 start() 创建的工作线程完成。如果不创建这些线程，就没有任何线程会进入 run() 执行调度循环。
     virtual void start();
+
     // 关闭线程池，停止调度器，等所有调度任务都执行完后再返回。
     virtual void stop();
 
@@ -77,7 +80,7 @@ protected:
     // 唤醒线程。
     virtual void tickle();
 
-    // 线程函数。
+    // 线程函数。调度器的核心，负责从任务队列中取出任务并通过协程执行。
     virtual void run();
 
     // 空闲协程函数，无任务调度时执行 idle 协程。
@@ -93,15 +96,10 @@ protected:
 
 private:
 
-    // 任务。
+    // 任务。参数可以给一个函数或者一个协程对象指针，这两种参数都接受。
     struct ScheduleTask
     {
-        ScheduleTask()
-        {
-            fiber = nullptr;
-            cb = nullptr;
-            thread = -1;
-        }
+        ScheduleTask() { reset(); }
 
         ScheduleTask(std::shared_ptr<Fiber> f, int thr)
         {
@@ -111,7 +109,7 @@ private:
 
         ScheduleTask(std::shared_ptr<Fiber> *f, int thr)
         {
-            fiber.swap(*f); // 将内容转移也就是指针内部的转移和上面的赋值不同，引用计数不会增加
+            fiber.swap(*f); // 将内容转移也就是指针内部的转移和上面的赋值不同，引用计数不会增加。
             thread = thr;
         }
 
@@ -144,7 +142,7 @@ private:
 
 private:
 
-    // 调度器的名称
+    // 调度器的名称。
     std::string m_name;
 
     // 互斥锁 -> 保护任务队列。

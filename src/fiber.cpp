@@ -173,9 +173,10 @@ std::shared_ptr<Fiber> Fiber::GetThis()
     // 如果有正在运行的协程就直接返回。
     if (t_fiber) return t_fiber->shared_from_this();
 
-    // 如果没有就返回主协程。
+    // 当前线程还没有 Fiber 环境，创建 Main Fiber。Main Fiber 作为当前线程的第一个协程，并默认作为调度协程。
     t_threadFiber = std::shared_ptr<Fiber>(new Fiber()); // 不能用 t_threadFiber = std::make_shared<Fiber>()，因为 Fiber() 的默认构造是私有的，不能从外部调用。
-    t_schedulerFiber = t_threadFiber.get();              // 除非主动设置，主协程默认为调度协程。
+    // Fiber 类并不知道 Scheduler 类的存在，除非更改设计，否则在 Fiber 类的语义下，主协程默认为调度协程。如果存在 Scheduler 类，会手动调用 SetSchedulerFiber() 函数设置。
+    t_schedulerFiber = t_threadFiber.get();
 
     assert(t_fiber == t_threadFiber.get()); // 用于判断，t_fiber 是否等于 main_fiber。是继续执行，否则程序终止。
 

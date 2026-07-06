@@ -1,9 +1,11 @@
 #include "scheduler.h"
 
 #include <cassert>
+#include <chrono>
 
 
 // 正在运行的协程调度器。
+// 调度器 Scheduler 是进程全局唯一的。每个线程都持有一个线程局部的指向 Scheduler 的指针。
 static thread_local Scheduler *t_scheduler = nullptr;
 
 
@@ -27,7 +29,7 @@ Scheduler::Scheduler(size_t threads, bool useCaller, const std::string &name)
     Thread::SetName(m_name); // 设置当前线程的名称为调度器的名称 m_name。
 
     // 使用主线程当作工作线程，创建协程的主要原因是为了实现更高效的任务调度和管理。
-    if (useCaller) // 如果user_caller为true，表示当前线程也要作为一个工作线程使用。
+    if (useCaller) // 如果 user_caller 为 true，表示当前线程也要作为一个工作线程使用。
     {
         --threads; // 因为主线程作为了工作线程所以需要额外创建的线程数量 --。
 
@@ -64,6 +66,27 @@ Scheduler::~Scheduler()
 
 void Scheduler::start()
 {
+    std::lock_guard<std::mutex> lock(m_mutex); // 互斥锁防止共享资源的竞争。
+
+    if (m_stopping) // 如果调度器退出直接报错打印 cerr 后面的话。
+    {
+        std::cerr << "Scheduler is stopped" << std::endl;
+
+
+        return;
+    }
+
+    assert(m_threads.empty()); // 首先线程池数量为空。
+    m_threads.resize(m_threadCount);
+
+    for (size_t i = 0; i < m_threadCount; ++i)
+    {
+        // 进程全局只有一个调度器，这个调度器管理一个线程池，每个线程都执行同一个调度器的调度循环（run()），共同消费同一个任务队列。
+        m_threads[i].reset(new Thread(std::bind(&Scheduler::run, this), m_name + "_" + std::to_string(i)));
+        m_threadIds.push_back(m_threads[i]->getId());
+    }
+
+    std::cout << "Scheduler::start() success\n";
 }
 
 void Scheduler::stop()
@@ -76,12 +99,113 @@ void Scheduler::tickle()
 
 void Scheduler::run()
 {
+    int threadId = Thread::GetThreadId(); // 获取当前线程的 ID。
+    std::cout << "Schedule::run() starts in thread: " << threadId << std::endl;
+
+    // set_hook_enable(true);
+
+    SetThis(); // 设置调度器对象。
+
+    // 新创建的工作线程刚启动时还没有主协程，需要先创建线程的 Main Fiber。后续所有任务协程都会与 Main Fiber 进行上下文切换。注意：这里只创建 Main Fiber，不会创建 Scheduler Fiber。Scheduler Fiber 仅在   useCaller=true 时，为 Caller 线程额外创建。
+    if (threadId != m_rootThread) Fiber::GetThis();
+
+    // 创建空闲协程，std::make_shared 是 C++11 引入的一个函数，用于创建 std::shared_ptr 对象。相比于直接使用 std::shared_ptr 构造函数，std::make_shared 更高效且更安全，因为它在单个内存分配中同时分配了控制块和对象，避免了额外的内存分配和指针操作。
+    std::shared_ptr<Fiber> idleFiber = std::make_shared<Fiber>(std::bind(&Scheduler::idle, this));
+
+    ScheduleTask task;
+    while (true)
+    {
+        task.reset();
+        bool tickleMe = false; // 是否唤醒了其他线程进行任务调度。
+
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+
+            auto it = m_tasks.begin();
+            // 1.遍历任务队列。
+            while (m_tasks.end() != it)
+            {
+                if (-1 != it->thread && threadId != it->thread) // 不能等于当前 threadId，其目的是让任何的线程都可以执行。
+                {
+                    ++it;
+                    tickleMe = true;
+                    continue;
+                }
+
+                // 2.取出任务。
+                assert(it->fiber || it->cb);
+                task = *it;
+                m_tasks.erase(it);
+                ++m_activeThreadCount;
+                break; // 这里取到任务的线程就直接 break 所以并没有遍历到队尾。
+            }
+            tickleMe = tickleMe || (it != m_tasks.end()); // 确保任然存在未处理的任务
+        }
+
+        if (tickleMe) // 这里虽然写了唤醒但并没有具体的逻辑代码，具体的在 io+scheduler。
+        {
+            tickle();
+        }
+
+        // 3.执行任务。
+        if (task.fiber)
+        {
+            // resume 协程，resume 返回时此时任务要么执行完了，要么半路 yield，总之任务完成了，活跃线程 -1。
+            {
+                std::lock_guard<std::mutex> lock(task.fiber->m_mutex);
+
+                if (Fiber::TERMINATE != task.fiber->getState()) task.fiber->resume();
+            }
+            --m_activeThreadCount; // 线程完成任务后就不再处于活跃状态，而是进入空闲状态，因此需要将活跃线程计数减一。
+            task.reset();
+        }
+        else if (task.cb)
+        {
+            // 对于函数也应该被调度，具体做法就封装成协程加入调度。
+            std::shared_ptr<Fiber> cbFiber = std::make_shared<Fiber>(task.cb);
+            {
+                std::lock_guard<std::mutex> lock(cbFiber->m_mutex);
+
+                cbFiber->resume(); // 刚创建出来的工作协程状态是 READY，可以被直接 resume()。
+            }
+            --m_activeThreadCount;
+            task.reset();
+        }
+        // 4.无任务 -> 执行空闲协程。
+        else
+        {
+            // 系统关闭 -> idle 协程将从死循环跳出并结束 -> 此时的 idle 协程状态为 TERMINATE -> 再次进入将跳出循环并退出 run()。
+            if (Fiber::TERMINATE == idleFiber->getState())
+            {
+                // 如果调度器没有调度任务，那么 idle 协程回不断的 resume/yield，不会结束进入一个忙等待，如果 idle 协程结束了，一定是调度器停止了，直到有任务才执行上面的 if/else，在这里 idleFiber 就是不断的和主协程进行交互的子协程。
+                std::cout << "Schedule::run() ends in thread: " << threadId << std::endl;
+                break;
+            }
+            ++m_idleThreadCount;
+            idleFiber->resume();
+            --m_idleThreadCount;
+        }
+    }
 }
 
 void Scheduler::idle()
 {
+    while (!stopping())
+    {
+        std::cout << "Scheduler::idle(), sleeping in thread: " << Thread::GetThreadId() << std::endl;
+
+        std::this_thread::sleep_for(std::chrono::seconds(1)); // 降低空闲协程在无任务时对 cpu 占用率，避免空转浪费资源。
+
+        Fiber::GetThis()->yield();
+    }
 }
 
 bool Scheduler::stopping()
 {
+    // 使用互斥锁的目的因为 m_tasks，mactiveThreadCount 会被多线程竞争所以需要互斥锁来保护资源的访问。
+    // 此时这个函数的目的就是为了判断调度器是否退出。在 stop 函数中如果 stopping 为 true 代表调度器已经退出直接返回 return 不进行任何的操作。
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+
+    return m_stopping && m_tasks.empty() && 0 == m_activeThreadCount;
 }
