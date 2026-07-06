@@ -25,46 +25,84 @@ public:
         TERMINATE
     };
 
+
 private:
 
-    Fiber(); // Fiber() 是私有的，只能被 GetThis() 方法调用，用于创建主协程。
+    // Fiber() 是私有的，只能被 GetThis() 方法调用，用于创建主协程。
+    Fiber();
+
 
 public:
 
-    Fiber(std::function<void()> cb, size_t stacksize = 0, bool runInScheduler = true); // 用于创建指定回调函数、栈大小和 runInScheduler 本协程是否参与调度器调度，默认为 true。stacksize 传入 0 代表自动分配栈空间大小。
+    // 用于创建指定回调函数、栈大小和 runInScheduler 本协程是否参与调度器调度，默认为 true。stacksize 传入 0 代表自动分配栈空间大小。
+    Fiber(std::function<void()> cb, size_t stacksize = 0, bool runInScheduler = true);
 
     virtual ~Fiber();
 
+
 public:
 
-    void reset(std::function<void()> cb);   // 重置协程状态和⼊⼝函数，复⽤栈空间，不重新创建栈。
-    void resume();                          // 恢复协程执行。
-    void yield();                           // 将执行全还给调度协程或者主协程。
-    uint64_t getId() const { return m_id; } // 获取唯一标识。
+    // 重置协程状态和⼊⼝函数，复⽤栈空间，不重新创建栈。
+    void reset(std::function<void()> cb);
+
+    // 恢复协程执行。
+    void resume();
+
+    // 将执行全还给调度协程或者主协程。
+    void yield();
+
+    // 获取唯一标识。
+    uint64_t getId() const { return m_id; }
+
+    // 获取协程状态。
     State getState() const { return m_state; }
 
+
 public:
 
-    static void SetThis(Fiber *f);           // 设置当前运行的协程。
-    static std::shared_ptr<Fiber> GetThis(); // 获取当前运行的协程的 shared_ptr 实例。如果没有，就返回主协程或调度协程。
-    static void SetSchedulerFiber(Fiber *f); // 设置调度协程，默认主协程。
-    static uint64_t GetFiberId();            // 获取当前运行的协程的 ID。
-    static void MainFunc();                  // 协程的主函数，入口点。
+    // 设置当前运行的协程。
+    static void SetThis(Fiber *f);
+
+    // 获取当前运行的协程的 shared_ptr 实例。如果没有，说明线程还没有 Fiber 环境，创建 Main Fiber。Main Fiber 作为当前线程的第一个协程，并默认作为调度协程。
+    static std::shared_ptr<Fiber> GetThis();
+
+    // 设置调度协程，默认主协程。
+    static void SetSchedulerFiber(Fiber *f);
+
+    // 获取当前运行的协程的 ID。
+    static uint64_t GetFiberId();
+
+    // 协程的主函数，入口点。
+    static void MainFunc();
 
 
 public:
 
     std::mutex m_mutex;
 
+
 private:
 
-    uint64_t m_id = 0;          // 协程唯一标识符。
-    uint32_t m_stackSize = 0;   // 栈的大小。
-    State m_state = READY;      // 协程的初始状态是 ready。
-    ucontext_t m_ctx;           // 协程的上下文。
-    void *m_stack = nullptr;    // 协程栈的指针。
-    std::function<void()> m_cb; // 协程的回调函数。
-    bool m_runInScheduler;      // 用于标记该协程是否受调度器管理。
+    // 协程唯一标识符。
+    uint64_t m_id = 0;
+
+    // 栈的大小。
+    uint32_t m_stackSize = 0;
+
+    // 协程的初始状态是 ready。
+    State m_state = READY;
+
+    // 协程的上下文。
+    ucontext_t m_ctx;
+
+    // 协程栈的指针。
+    void *m_stack = nullptr;
+
+    // 协程的回调函数。
+    std::function<void()> m_cb;
+
+    // 用于标记该协程是否受调度器管理。
+    bool m_runInScheduler;
 };
 
 

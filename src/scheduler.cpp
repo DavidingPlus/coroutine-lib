@@ -4,8 +4,7 @@
 #include <chrono>
 
 
-// 正在运行的协程调度器。
-// 调度器 Scheduler 是进程全局唯一的。每个线程都持有一个线程局部的指向 Scheduler 的指针。
+// 正在运行的协程调度器。调度器 Scheduler 是进程全局唯一的。每个线程都持有一个线程局部的指向 Scheduler 的指针。
 static thread_local Scheduler *t_scheduler = nullptr;
 
 
@@ -24,7 +23,7 @@ Scheduler::Scheduler(size_t threads, bool useCaller, const std::string &name)
 {
     assert(threads > 0 && Scheduler::GetThis() == nullptr); // 首先判断线程的数量是否大于 0，并且调度器的对象是否是空指针，是就调用 setThis() 进行设置。
 
-    SetThis(); // 设置当前调度器对象。
+    // SetThis(); // 设置当前调度器对象。
 
     Thread::SetName(m_name); // 设置当前线程的名称为调度器的名称 m_name。
 
@@ -91,10 +90,47 @@ void Scheduler::start()
 
 void Scheduler::stop()
 {
+    std::cout << "Schedule::stop() starts in thread: " << Thread::GetThreadId() << std::endl;
+
+    // 1. 判断是否已经可以停止。
+    if (stopping()) return;
+
+    m_stopping = true;
+
+    // 2. 检查 stop() 是否再正确的线程调用。
+    // TODO 如果当前调度器使用 Caller 模式，那么 stop() 必须在调度线程（Caller 线程）里调用；如果不是 Caller 模式，那么 stop() 不能在 Scheduler 工作线程里调用。
+    m_useCaller ? assert(GetThis() == this) : assert(GetThis() != this);
+
+    // 3. 唤醒所有睡眠中的线程。
+
+    // 调用 tickle() 的目的唤醒空闲线程或协程，防止 m_scheduler 或其他线程处于永久阻塞在等待任务的状态中
+    for (size_t i = 0; i < m_threadCount; ++i) tickle();
+    // 唤醒可能处于挂起状态，等待下一个任务的调度的协程。
+    if (m_schedulerFiber) tickle();
+
+    // 当只有主线程或调度线程作为工作线程的情况，只能从 stop() 方法开始任务调度。
+    if (m_schedulerFiber)
+    {
+        m_schedulerFiber->resume(); // 开始任务调度。
+
+        std::cout << "m_schedulerFiber ends in thread:" << Thread::GetThreadId() << std::endl;
+    }
+    // 获取此时的线程通过 swap 不会增加引用计数的方式加入到 thrs，方便下面的 join 保持线程正常退出。
+    std::vector<std::shared_ptr<Thread>> thrs;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        thrs.swap(m_threads);
+    }
+
+    for (auto &i : thrs) i->join();
+
+    std::cout << "Schedule::stop() ends in thread:" << Thread::GetThreadId() << std::endl;
 }
 
 void Scheduler::tickle()
 {
+    // 留空。具体代码在子类 io+scheduler。
 }
 
 void Scheduler::run()
@@ -116,38 +152,42 @@ void Scheduler::run()
     while (true)
     {
         task.reset();
-        bool tickleMe = false; // 是否唤醒了其他线程进行任务调度。
+        // 是否需要唤醒其他线程进行任务调度。
+        bool tickleMe = false;
 
         {
             std::lock_guard<std::mutex> lock(m_mutex);
 
+            // 不能直接取第一个任务，因为 Scheduler 支持指定任务运行在指定线程上。
             auto it = m_tasks.begin();
-            // 1.遍历任务队列。
+            // 1. 遍历任务队列。
             while (m_tasks.end() != it)
             {
-                if (-1 != it->thread && threadId != it->thread) // 不能等于当前 threadId，其目的是让任何的线程都可以执行。
+                // 设置了指定的线程 ID，就遍历到指定的线程 ID 再取任务。
+                if (-1 != it->thread && threadId != it->thread)
                 {
                     ++it;
-                    tickleMe = true;
+                    tickleMe = true; // 这个任务虽然不是我的，但是可以被其他线程执行，因此设置为 true。
+
                     continue;
                 }
 
-                // 2.取出任务。
+                // 2. 取出任务。
                 assert(it->fiber || it->cb);
                 task = *it;
                 m_tasks.erase(it);
                 ++m_activeThreadCount;
+
                 break; // 这里取到任务的线程就直接 break 所以并没有遍历到队尾。
             }
-            tickleMe = tickleMe || (it != m_tasks.end()); // 确保任然存在未处理的任务
+            // 代码执行到这里，说明已经取走任务了。如果队列中还有任务，那么仍然可以通知其他线程醒来工作。加第二个条件的判断是因为上面的遍历任务队列上来就命中了，直接退出循环，这时 tickleMe 是 false，因此需要两个条件一起判断。
+            tickleMe = tickleMe || (it != m_tasks.end());
         }
 
-        if (tickleMe) // 这里虽然写了唤醒但并没有具体的逻辑代码，具体的在 io+scheduler。
-        {
-            tickle();
-        }
+        // 这里虽然写了唤醒但并没有具体的逻辑代码，具体的在 io+scheduler。
+        if (tickleMe) tickle();
 
-        // 3.执行任务。
+        // 3. 执行任务。
         if (task.fiber)
         {
             // resume 协程，resume 返回时此时任务要么执行完了，要么半路 yield，总之任务完成了，活跃线程 -1。
@@ -156,6 +196,7 @@ void Scheduler::run()
 
                 if (Fiber::TERMINATE != task.fiber->getState()) task.fiber->resume();
             }
+
             --m_activeThreadCount; // 线程完成任务后就不再处于活跃状态，而是进入空闲状态，因此需要将活跃线程计数减一。
             task.reset();
         }
@@ -168,10 +209,11 @@ void Scheduler::run()
 
                 cbFiber->resume(); // 刚创建出来的工作协程状态是 READY，可以被直接 resume()。
             }
+
             --m_activeThreadCount;
             task.reset();
         }
-        // 4.无任务 -> 执行空闲协程。
+        // 4. 无任务 -> 执行空闲协程。
         else
         {
             // 系统关闭 -> idle 协程将从死循环跳出并结束 -> 此时的 idle 协程状态为 TERMINATE -> 再次进入将跳出循环并退出 run()。
@@ -179,8 +221,10 @@ void Scheduler::run()
             {
                 // 如果调度器没有调度任务，那么 idle 协程回不断的 resume/yield，不会结束进入一个忙等待，如果 idle 协程结束了，一定是调度器停止了，直到有任务才执行上面的 if/else，在这里 idleFiber 就是不断的和主协程进行交互的子协程。
                 std::cout << "Schedule::run() ends in thread: " << threadId << std::endl;
+
                 break;
             }
+
             ++m_idleThreadCount;
             idleFiber->resume();
             --m_idleThreadCount;

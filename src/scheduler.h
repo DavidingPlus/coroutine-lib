@@ -27,9 +27,11 @@ public:
     // threads 指定线程池的线程数量，useCaller 指定是否将主线程作为工作线程，name 调度器的名称。
     Scheduler(size_t threads = 1, bool useCaller = true, const std::string &name = "Scheduler");
 
-    virtual ~Scheduler(); // 防止出现资源泄露，基类指针删除派生类对象时不完全销毁的问题。
+    // 防止出现资源泄露，基类指针删除派生类对象时不完全销毁的问题。
+    virtual ~Scheduler();
 
-    const std::string &getName() const { return m_name; } // 获取调度器的名字。
+    // 获取调度器的名字。
+    const std::string &getName() const { return m_name; }
 
 
 public:
@@ -46,17 +48,19 @@ protected:
 
 public:
 
-    // 添加任务到任务队列。
-    // FiberOrCb 调度任务类型，可以是协程对象或函数指针。
-    template <class FiberOrCb>
+    // 添加任务到任务队列。FiberOrCb 调度任务类型，可以是协程对象或函数指针。
+    template <typename FiberOrCb>
     void scheduleLock(FiberOrCb fc, int thread = -1)
     {
         bool needTickle = false; // 用于标记任务队列是否为空，从而判断是否需要唤醒线程。
+
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            // empty ->  all thread is idle -> need to be waken up
+
+            // 如果任务队列为空，代表目前所有线程都没有执行任务，都在执行空闲 idle 协程，需要被唤醒。
             needTickle = m_tasks.empty();
-            // 创建Task的任务对象。
+
+            // 创建 Task 的任务对象。
             ScheduleTask task(fc, thread);
             if (task.fiber || task.cb) m_tasks.push_back(task); // 存在就加入。
         }
@@ -89,14 +93,13 @@ protected:
     // 是否可以关闭。
     virtual bool stopping();
 
-    // 返回是否有空闲线程。
-    // 当调度协程进入 idle 时空闲线程数 +1，从 idle 协程返回时空闲线程数减 1。
+    // 返回是否有空闲线程。当调度协程进入 idle 时空闲线程数 +1，从 idle 协程返回时空闲线程数减 1。
     bool hasIdleThreads() { return m_idleThreadCount > 0; }
 
 
 private:
 
-    // 任务。参数可以给一个函数或者一个协程对象指针，这两种参数都接受。
+    // 任务类型。参数可以给一个函数或者一个协程对象指针，这两种参数都接受。
     struct ScheduleTask
     {
         ScheduleTask() { reset(); }
@@ -137,7 +140,8 @@ private:
 
         std::function<void()> cb;
 
-        int thread; // 指定任务需要运行的线程 id。
+        // 指定任务需要运行的线程 id。
+        int thread;
     };
 
 private:
@@ -175,7 +179,7 @@ private:
     // 如果是 -> 记录主线程的线程 id。
     int m_rootThread = -1;
 
-    // 是否正在关闭。
+    // 是否正在关闭。这个状态用于告诉所有线程，调度器准备退出了，以后不要一直等待新任务。
     bool m_stopping = false;
 };
 
