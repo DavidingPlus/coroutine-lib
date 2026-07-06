@@ -6,7 +6,7 @@
 #include <chrono>
 
 
-// 正在运行的协程调度器。调度器 Scheduler 是进程全局唯一的。每个线程都持有一个线程局部的指向 Scheduler 的指针。
+// 当前线程绑定的调度器对象。每个线程都有一个 thread_local 的 Scheduler 指针，用于记录当前线程正在运行的调度器，他们可能指向的是同一个调度器对象。
 static thread_local Scheduler *t_scheduler = nullptr;
 
 
@@ -25,26 +25,27 @@ Scheduler::Scheduler(size_t threads, bool useCaller, const std::string &name)
 {
     assert(threads > 0 && Scheduler::GetThis() == nullptr); // 首先判断线程的数量是否大于 0，并且调度器的对象是否是空指针，是就调用 setThis() 进行设置。
 
-    // SetThis(); // 设置当前调度器对象。
-
     Thread::SetName(m_name); // 设置当前线程的名称为调度器的名称 m_name。
 
-    // 使用主线程当作工作线程，创建协程的主要原因是为了实现更高效的任务调度和管理。
-    if (useCaller) // 如果 user_caller 为 true，表示当前线程也要作为一个工作线程使用。
+    // useCaller 决定创建调度器的线程（Caller 线程）是否作为工作线程参与协程调度。
+    // useCaller = true：表示 Caller 线程也要作为一个工作线程使用。Caller 线程需要执行 Scheduler::run()，但由于它还要继续运行主流程（如 main 函数），因此不能直接进入 run()，而是额外创建一个调度协程（Scheduler Fiber），由主协程切换到调度协程，再由调度协程负责调度和执行各个任务协程。
+    // useCaller = false：Caller 线程仅负责创建、启动和停止调度器，不参与协程调度。调度工作全部交给新创建的 Worker 线程完成。由于 Worker 线程的入口函数本身就是 Scheduler::run()，无需再额外创建调度协程，线程直接进入调度循环即可。
+    if (useCaller)
     {
-        --threads; // 因为主线程作为了工作线程所以需要额外创建的线程数量 --。
+        --threads; // 因为主线程作为了工作线程所以需要额外创建的线程数量减 1。
 
         // 创建主协程。
         Fiber::GetThis();
 
         // 创建调度协程。调度协程显然是 false -> 协程退出后将返回主协程。
+        // void Scheduler::run() 等价于 void Scheduler::run(Scheduler* this)，成员函数必须知道作用于哪个对象，因此绑定 this 进去，std::bind(&Scheduler::run, this)。
         m_schedulerFiber.reset(new Fiber(std::bind(&Scheduler::run, this), 0, false));
         // 设置协程的调度器对象。
         Fiber::SetSchedulerFiber(m_schedulerFiber.get());
 
         // 获取主线程 ID。
         m_rootThread = Thread::GetThreadId();
-        m_threadIds.push_back(m_rootThread);
+        m_threadIds.emplace_back(m_rootThread);
     }
 
     m_threadCount = threads; // 将剩余的线程数量（即总线程数量减去是否使用调用者线程）赋值给 m_threadCount。
@@ -57,10 +58,7 @@ Scheduler::~Scheduler()
     assert(true == stopping()); // 判断调度器是否终止。
 
     // 获取调度器的对象。
-    if (this == GetThis())
-    {
-        t_scheduler = nullptr; // 将其设置为 nullptr 防止悬空指针。
-    }
+    if (this == GetThis()) t_scheduler = nullptr; // 将其设置为 nullptr 防止悬空指针。
 
     if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::~Scheduler() success\n";
 }
@@ -84,7 +82,7 @@ void Scheduler::start()
     {
         // 进程全局只有一个调度器，这个调度器管理一个线程池，每个线程都执行同一个调度器的调度循环（run()），共同消费同一个任务队列。
         m_threads[i].reset(new Thread(std::bind(&Scheduler::run, this), m_name + "_" + std::to_string(i)));
-        m_threadIds.push_back(m_threads[i]->getId());
+        m_threadIds.emplace_back(m_threads[i]->getId());
     }
 
     if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::start() success\n";
@@ -97,26 +95,29 @@ void Scheduler::stop()
     // 1. 判断是否已经可以停止。
     if (stopping()) return;
 
+    // 告诉所有线程，以后不要一直调度了，可以准备退出。
     m_stopping = true;
 
     // 2. 检查 stop() 是否再正确的线程调用。
-    // TODO 如果当前调度器使用 Caller 模式，那么 stop() 必须在调度线程（Caller 线程）里调用；如果不是 Caller 模式，那么 stop() 不能在 Scheduler 工作线程里调用。
-    m_useCaller ? assert(GetThis() == this) : assert(GetThis() != this);
+    // 下面的 this 指针对应的 Scheduler 对象是主线程最开始创建调度器的那个 Scheduler 对象。调用 Scheduler::stop() 函数的是一定主线程，例如 main() 函数里面！
+    // m_useCaller 为 true，Caller 线程参与调度，因此当前线程绑定的 Scheduler(GetThis()) 就是当前 Scheduler 对象(this)，两者应相等。
+    // m_useCaller 为 false，Caller 线程不参与协程调度，它的 t_scheduler 是 nullptr。Worker 线程负责自己的协程调度，它的 t_scheduler 和 this 指针不同。
+    m_useCaller ? assert(this == GetThis()) : assert(this != GetThis());
 
     // 3. 唤醒所有睡眠中的线程。
-
-    // 调用 tickle() 的目的唤醒空闲线程或协程，防止 m_scheduler 或其他线程处于永久阻塞在等待任务的状态中
+    // 调用 tickle() 的目的唤醒空闲线程或协程，防止 m_scheduler 或其他线程处于永久阻塞在等待任务的状态中。
     for (size_t i = 0; i < m_threadCount; ++i) tickle();
-    // 唤醒可能处于挂起状态，等待下一个任务的调度的协程。
-    if (m_schedulerFiber) tickle();
 
-    // 当只有主线程或调度线程作为工作线程的情况，只能从 stop() 方法开始任务调度。
+    // 发生在 useCaller 为 true 时，唤醒执行调度协程的线程。
+    if (m_schedulerFiber) tickle();
+    // 唤醒调度协程以后，让它继续任务调度，
     if (m_schedulerFiber)
     {
         m_schedulerFiber->resume(); // 开始任务调度。
 
         if (COROUTINE_CONFIG_DEBUG) std::cout << "m_schedulerFiber ends in thread:" << Thread::GetThreadId() << std::endl;
     }
+
     // 获取此时的线程通过 swap 不会增加引用计数的方式加入到 thrs，方便下面的 join 保持线程正常退出。
     std::vector<std::shared_ptr<Thread>> thrs;
     {
@@ -137,14 +138,15 @@ void Scheduler::tickle()
 
 void Scheduler::run()
 {
-    int threadId = Thread::GetThreadId(); // 获取当前线程的 ID。
+    // 获取当前线程的 ID。
+    int threadId = Thread::GetThreadId();
     if (COROUTINE_CONFIG_DEBUG) std::cout << "Schedule::run() starts in thread: " << threadId << std::endl;
 
     // set_hook_enable(true);
 
     SetThis(); // 设置调度器对象。
 
-    // 新创建的工作线程刚启动时还没有主协程，需要先创建线程的 Main Fiber。后续所有任务协程都会与 Main Fiber 进行上下文切换。注意：这里只创建 Main Fiber，不会创建 Scheduler Fiber。Scheduler Fiber 仅在   useCaller=true 时，为 Caller 线程额外创建。
+    // 新创建的工作线程刚启动时还没有主协程，需要先创建线程的 Main Fiber。后续任务协程会以 Scheduler Fiber（Caller）或 Main Fiber（Worker）作为返回点进行切换。注意：这里只创建 Main Fiber，不会创建 Scheduler Fiber。Scheduler Fiber 仅在 useCaller=true 时，为 Caller 线程额外创建。
     if (threadId != m_rootThread) Fiber::GetThis();
 
     // 创建空闲协程，std::make_shared 是 C++11 引入的一个函数，用于创建 std::shared_ptr 对象。相比于直接使用 std::shared_ptr 构造函数，std::make_shared 更高效且更安全，因为它在单个内存分配中同时分配了控制块和对象，避免了额外的内存分配和指针操作。
@@ -221,7 +223,7 @@ void Scheduler::run()
             // 系统关闭 -> idle 协程将从死循环跳出并结束 -> 此时的 idle 协程状态为 TERMINATE -> 再次进入将跳出循环并退出 run()。
             if (Fiber::TERMINATE == idleFiber->getState())
             {
-                // 如果调度器没有调度任务，那么 idle 协程回不断的 resume/yield，不会结束进入一个忙等待，如果 idle 协程结束了，一定是调度器停止了，直到有任务才执行上面的 if/else，在这里 idleFiber 就是不断的和主协程进行交互的子协程。
+                // 如果调度器没有调度任务，那么 idle 协程回不断的 resume/yield，不会结束进入一个忙等待，如果 idle 协程结束了，一定是调度器停止了，直到有任务才执行上面的 if/else。idle 协程不断与当前线程的调度入口（Main Fiber 或 Scheduler Fiber）进行切换。当 stopping() 返回 true 时，idle 协程结束，run() 也随之退出。
                 if (COROUTINE_CONFIG_DEBUG) std::cout << "Schedule::run() ends in thread: " << threadId << std::endl;
 
                 break;
@@ -236,11 +238,13 @@ void Scheduler::run()
 
 void Scheduler::idle()
 {
+    // 当 stop() 将 m_stopping 设置为 true 后，调度线程不会立即退出，而是继续执行 Scheduler::run()，将任务队列中剩余的任务全部调度完成。当没有可执行任务时，会进入空闲协程 idle()。此时 stopping() 返回 true，idle() 会退出循环并结束，随后 Scheduler::run() 跳出主循环，最终使调度线程（或调度协程）正常结束，实现调度器的优雅退出（Graceful Shutdown）。
     while (!stopping())
     {
         if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::idle(), sleeping in thread: " << Thread::GetThreadId() << std::endl;
 
-        std::this_thread::sleep_for(std::chrono::seconds(1)); // 降低空闲协程在无任务时对 cpu 占用率，避免空转浪费资源。
+        // 降低空闲协程在无任务时对 cpu 占用率，避免空转浪费资源。
+        std::this_thread::sleep_for(std::chrono::seconds(1));
 
         Fiber::GetThis()->yield();
     }

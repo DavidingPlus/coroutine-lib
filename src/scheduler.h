@@ -13,11 +13,11 @@
 // 调度器任务的定义：对于协程调度器而言，协程是原生的调度单位。函数同样可以作为调度任务。原因在于：协程本质上是函数及其运行状态（上下文）的组合。将函数视为任务，可以简化用户的使用逻辑。在实际实现中，调度器内部会将传入的函数包装成协程后再进行调度，但对外部接口而言，调度器应同时支持协程和函数。
 // 多线程调度：基于协程的基本特性，一个线程在同一时刻只能运行一个协程。为了提升调度器的吞吐量和并发能力，引入多线程调度机制。通过维护一个线程池，实现多个线程同时运行多个协程，这种 M：N 的调度模型（M 个协程运行在 N 个线程上）在处理高并发 IO 时效率远高于单线程。
 // 调度器内部维护一个任务队列和一个调度线程池。启动调度后，线程池按序从队列中取出任务执行。调度线程池可灵活包含 Caller 线程。当所有任务执行完毕且无新任务时，线程池进入空闲状态。一旦新任务到达，通过通知机制唤醒线程池重新开始调度。执行停止逻辑时，各调度线程依次退出，最终完成调度器的资源释放。
+// 注意区分几个概念：调度器，调度线程，调度协程！！！
 /*
  * 调度器不仅可以管理新创建的工作线程，还可以将创建调度器的 Caller 线程纳入调度范围（useCaller=true）。
  * 如果不使用 Caller 线程参与调度，那么 Caller 在线程启动调度器后通常只能等待其他工作线程结束，无法继续执行任务，造成线程资源的浪费；而将 Caller 线程作为调度线程之一，则无需额外创建一个工作线程，能够提高线程利用率并减少线程创建开销。
- * 当 Caller 线程加入调度后，并不是 Main Fiber 与 Scheduler Fiber 同时运行，而是 Main Fiber 主动切换到
-Scheduler Fiber，之后 Caller 线程便进入调度循环。Scheduler Fiber 负责从任务队列中取出协程并执行，当某个协程被调度运行时，它会独占当前线程的执行权，Scheduler Fiber 暂停执行；只有当协程主动 yield、阻塞（Hook 后）或执行结束时，控制权才会重新回到 Scheduler Fiber，由调度器继续选择下一个协程运行。
+ * 当 Caller 线程加入调度后，并不是 Main Fiber 与 Scheduler Fiber 同时运行，而是 Main Fiber 主动切换到 Scheduler Fiber，之后 Caller 线程便进入调度循环。Scheduler Fiber 负责从任务队列中取出协程并执行，当某个协程被调度运行时，它会独占当前线程的执行权，Scheduler Fiber 暂停执行；只有当协程主动 yield、阻塞（Hook 后）或执行结束时，控制权才会重新回到 Scheduler Fiber，由调度器继续选择下一个协程运行。
  * 因此，一个线程虽然可以拥有多个协程，但任意时刻只能运行一个协程，调度器与普通协程通过上下文切换轮流执行，而不是并行执行，这也是协程属于协作式调度（Cooperative Scheduling）的原因。
  */
 class Scheduler
@@ -36,7 +36,7 @@ public:
 
 public:
 
-    // 获取正在运行的调度器。
+    /// 获取当前线程绑定的调度器对象。如果当前线程没有进入 Scheduler::run()，则返回 nullptr。
     static Scheduler *GetThis();
 
 
@@ -49,6 +49,7 @@ protected:
 public:
 
     // 添加任务到任务队列。FiberOrCb 调度任务类型，可以是协程对象或函数指针。
+    // 调度器既支持直接调度协程，也支持调度普通函数。普通函数会在真正执行时包装成协程，这里只保存二者之一。
     template <typename FiberOrCb>
     void scheduleLock(FiberOrCb fc, int thread = -1)
     {
@@ -170,13 +171,15 @@ private:
     // 空闲线程数。
     std::atomic<size_t> m_idleThreadCount = {0};
 
-    // 主线程是否用作工作线程。
+    // 主线程是否也参与工作线程，分担任务。
+    // useCaller = true：Caller 线程也会成为一个工作线程，它会运行 Scheduler::run()，与其它 Worker 一起调度和执行协程，从而减少创建额外线程的开销，并充分利用已有线程资源。
+    // useCaller = false：Caller 线程仅负责创建、启动和停止调度器，不参与协程调度；所有协程都由新创建的 Worker 线程执行。
     bool m_useCaller;
 
-    // 如果是 -> 需要额外创建调度协程。
+    // 如果是 m_useCaller，需要额外创建的调度协程指针。
     std::shared_ptr<Fiber> m_schedulerFiber;
 
-    // 如果是 -> 记录主线程的线程 id。
+    // 如果是 m_useCaller，记录主线程的线程 ID。
     int m_rootThread = -1;
 
     // 是否正在关闭。这个状态用于告诉所有线程，调度器准备退出了，以后不要一直等待新任务。
