@@ -1,5 +1,6 @@
 #include "timer.h"
 
+#include <iostream>
 #include <chrono>
 
 
@@ -77,6 +78,8 @@ void TimerManager::tick()
 {
     uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 
+    if (COROUTINE_CONFIG_DEBUG) std::cout << "TimerManager::tick() now: " << now << std::endl;
+
     // 这里的循环是为了让所有超时的定时任务都被执行掉。
     while (m_head)
     {
@@ -93,3 +96,16 @@ void TimerManager::tick()
         delete timer;
     }
 }
+
+#if COROUTINE_CONFIG_DEBUG
+
+void TimerManager::printTimers()
+{
+    std::cout << "TimerManager::printTimers(): ";
+
+    for (Timer *cur = m_head; cur; cur = cur->next) std::cout << cur->m_expire << " ";
+
+    std::cout << std::endl;
+}
+
+#endif

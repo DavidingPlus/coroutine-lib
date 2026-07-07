@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <functional>
 
+#include "config.h"
+
 
 class Timer
 {
@@ -49,6 +51,14 @@ public:
 
     // 检查哪些 Timer 已经超时，并执行完所有超时的定时任务。这个函数的外部一般是有人在调用这个函数检查是否超时。
     void tick();
+
+
+#if COROUTINE_CONFIG_DEBUG
+
+    // 打印定时器管理器中的定时器的信息。
+    void printTimers();
+
+#endif
 
 
 private:
