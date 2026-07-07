@@ -29,6 +29,13 @@ jobs:
       working-directory: ${{github.workspace}}
       run: xmake build
 
+    - name: Run Target Timer
+      working-directory: ${{github.workspace}}
+      run: |
+        touch snippet/Timer/.buildme
+        xmake build
+        xmake run
+
     - name: Install Targets
       working-directory: ${{github.workspace}}
       run: xmake install
