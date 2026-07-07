@@ -40,7 +40,10 @@ public:
     // 插入。
     void add(const Timer &timer);
 
-    // TODO 删除堆顶。目前只支持删除堆顶的元素。
+    // 删除指定下标的定时器。
+    void remove(size_t index);
+
+    // 删除堆顶。
     void pop();
 
     // 执行到期任务。
