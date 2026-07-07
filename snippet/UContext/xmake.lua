@@ -1,9 +1,14 @@
-target("UniqueLockTest1")
+target("UContext1")
     set_kind("binary")
     add_files("main1.cpp")
 target_end()
 
-target("UniqueLockTest2")
+target("UContext2")
     set_kind("binary")
     add_files("main2.cpp")
+target_end()
+
+target("UContext3")
+    set_kind("binary")
+    add_files("main3.cpp")
 target_end()
