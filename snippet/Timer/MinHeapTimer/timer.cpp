@@ -1,5 +1,10 @@
 #include "timer.h"
 
+#include "config.h"
+
+#include <iostream>
+#include <chrono>
+
 
 size_t TimerManager::getParentIndex(size_t index) { return (index - 1) / 2; }
 
@@ -28,6 +33,25 @@ void TimerManager::pop()
 
 void TimerManager::tick()
 {
+    // 获取当前时间，用于判断定时器是否到期。
+    uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+
+    if (COROUTINE_CONFIG_DEBUG) std::cout << "TimerManager::tick() now: " << now << std::endl;
+
+    while (!m_heap.empty())
+    {
+        // 最小堆的堆顶永远保存最早到期的定时器。如果堆顶定时器还未到期，说明其它定时器也不可能到期，直接退出。
+        if (now < m_heap[0].m_expire) break;
+
+        // 保存堆顶定时器。先删除定时器再执行回调，避免回调函数内部修改 TimerManager 导致堆结构变化。
+        Timer timer = m_heap[0];
+
+        // 删除已经到期的定时器，并通过 heapifyDown() 恢复最小堆性质。
+        pop();
+
+        // 执行定时器回调。
+        if (timer.m_callback) timer.m_callback();
+    }
 }
 
 void TimerManager::heapifyUp(size_t index)
@@ -49,11 +73,24 @@ void TimerManager::heapifyDown(size_t index)
 {
     while (index < m_heap.size())
     {
-        size_t leftChild = TimerManager::getLeftChildIndex(index);
-        size_t rightChild = TimerManager::getRightChildIndex(index);
+        size_t left = getLeftChildIndex(index);
+        size_t right = getRightChildIndex(index);
 
-        auto &node = m_heap[leftChild].m_expire < m_heap[rightChild].m_expire ? m_heap[leftChild] : m_heap[rightChild];
+        // 完全二叉树中，没有左孩子，一定没有右孩子，说明当前节点是叶子节点。
+        if (left >= m_heap.size()) break;
 
-        // TODO
+        // 默认左孩子较小，选择左孩子。
+        size_t smaller = left;
+
+        // 如果右孩子存在，并且右孩子更小，则选择右孩子。
+        if (right < m_heap.size() && m_heap[right].m_expire < m_heap[left].m_expire) smaller = right;
+
+        // 已经满足最小堆性质。
+        if (m_heap[index].m_expire <= m_heap[smaller].m_expire) break;
+
+        // 当前节点较大，与较小孩子交换。
+        std::swap(m_heap[index], m_heap[smaller]);
+
+        index = smaller;
     }
 }
