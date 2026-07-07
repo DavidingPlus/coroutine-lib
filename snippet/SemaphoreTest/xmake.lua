@@ -1,4 +1,4 @@
-target("SemaphoreTest1")
+target("SemaphoreTest")
     set_kind("binary")
-    add_files("main1.cpp")
+    add_files("main.cpp")
 target_end()
