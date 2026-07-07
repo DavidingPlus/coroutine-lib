@@ -1,6 +1,6 @@
 add_requires("gtest")
 
-target("AscendingOrderLinkedListTimerTest")
+target("AscendingOrderLinkedListTimer")
     set_kind("binary")
     add_files("*.cpp")
     add_includedirs("$(builddir)/config/")
