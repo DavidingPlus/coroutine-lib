@@ -9,24 +9,24 @@
 
 TEST(TimerManagerTest, EmptyTick)
 {
-    TimerManager mgr;
+    TimerManager tmr;
 
     EXPECT_NO_THROW(
         {
-            mgr.tick();
+            tmr.tick();
         });
 }
 
 TEST(TimerManagerTest, OneTimer)
 {
-    TimerManager mgr;
+    TimerManager tmr;
     std::atomic_int count = 0;
     uint64_t now =
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count();
 
-    mgr.addTimer(
+    tmr.addTimer(
         new Timer(
             now + 100,
             [&]()
@@ -37,39 +37,39 @@ TEST(TimerManagerTest, OneTimer)
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
 
     EXPECT_EQ(count, 0);
-    mgr.tick();
+    tmr.tick();
     EXPECT_EQ(count, 1);
 }
 
 TEST(TimerManagerTest, MultipleTimer)
 {
-    TimerManager mgr;
+    TimerManager tmr;
     std::vector<int> res;
     uint64_t now =
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count();
 
-    mgr.addTimer(new Timer(now + 300,
+    tmr.addTimer(new Timer(now + 300,
                            [&]
                            {
                                res.push_back(3);
                            }));
 
-    mgr.addTimer(new Timer(now + 100,
+    tmr.addTimer(new Timer(now + 100,
                            [&]
                            {
                                res.push_back(1);
                            }));
 
-    mgr.addTimer(new Timer(now + 200,
+    tmr.addTimer(new Timer(now + 200,
                            [&]
                            {
                                res.push_back(2);
                            }));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(350));
-    mgr.tick();
+    tmr.tick();
 
     ASSERT_EQ(res.size(), 3);
 
@@ -80,31 +80,31 @@ TEST(TimerManagerTest, MultipleTimer)
 
 TEST(TimerManagerTest, NotExpire)
 {
-    TimerManager mgr;
+    TimerManager tmr;
     bool called = false;
     uint64_t now =
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count();
 
-    mgr.addTimer(new Timer(now + 500,
+    tmr.addTimer(new Timer(now + 500,
                            [&]
                            {
                                called = true;
                            }));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    mgr.tick();
+    tmr.tick();
     EXPECT_FALSE(called);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    mgr.tick();
+    tmr.tick();
     EXPECT_TRUE(called);
 }
 
 TEST(TimerManagerTest, AdjustTimer)
 {
-    TimerManager mgr;
+    TimerManager tmr;
     bool called = false;
     uint64_t now =
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -117,23 +117,23 @@ TEST(TimerManagerTest, AdjustTimer)
                                called = true;
                            });
 
-    mgr.addTimer(timer);
+    tmr.addTimer(timer);
 
     // 延长到 500ms。
-    mgr.adjustTimer(timer, now + 500);
+    tmr.adjustTimer(timer, now + 500);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    mgr.tick();
+    tmr.tick();
     EXPECT_FALSE(called);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    mgr.tick();
+    tmr.tick();
     EXPECT_TRUE(called);
 }
 
 TEST(TimerManagerTest, DeleteTimer)
 {
-    TimerManager mgr;
+    TimerManager tmr;
     bool called = false;
     uint64_t now =
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -146,43 +146,43 @@ TEST(TimerManagerTest, DeleteTimer)
                                called = true;
                            });
 
-    mgr.addTimer(timer);
+    tmr.addTimer(timer);
 
-    mgr.delTimer(timer);
+    tmr.delTimer(timer);
     delete timer;
 
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
 
-    mgr.tick();
+    tmr.tick();
     EXPECT_FALSE(called);
 }
 
 TEST(TimerManagerTest, TickManyTimes)
 {
-    TimerManager mgr;
+    TimerManager tmr;
     int count = 0;
     uint64_t now =
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch())
             .count();
 
-    mgr.addTimer(new Timer(now + 100, [&]
+    tmr.addTimer(new Timer(now + 100, [&]
                            { ++count; }));
-    mgr.addTimer(new Timer(now + 200, [&]
+    tmr.addTimer(new Timer(now + 200, [&]
                            { ++count; }));
-    mgr.addTimer(new Timer(now + 300, [&]
+    tmr.addTimer(new Timer(now + 300, [&]
                            { ++count; }));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(110));
-    mgr.tick();
+    tmr.tick();
     EXPECT_EQ(count, 1);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(110));
-    mgr.tick();
+    tmr.tick();
     EXPECT_EQ(count, 2);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(110));
-    mgr.tick();
+    tmr.tick();
     EXPECT_EQ(count, 3);
 }
 
@@ -190,13 +190,13 @@ TEST(TimerManagerTest, TickManyTimes)
 
 TEST(TimerManagerTest, InsertOrder)
 {
-    TimerManager mgr;
+    TimerManager tmr;
 
-    mgr.addTimer(new Timer(300, [] {}));
-    mgr.addTimer(new Timer(100, [] {}));
-    mgr.addTimer(new Timer(200, [] {}));
+    tmr.addTimer(new Timer(300, [] {}));
+    tmr.addTimer(new Timer(100, [] {}));
+    tmr.addTimer(new Timer(200, [] {}));
 
-    mgr.printTimers();
+    tmr.printTimers();
 }
 
 #endif
