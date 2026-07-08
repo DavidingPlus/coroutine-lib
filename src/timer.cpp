@@ -13,6 +13,14 @@ bool Timer::reset(uint64_t ms, bool fromNow)
 {
 }
 
+Timer::Timer(uint64_t ms, std::function<void()> cb, bool recurring, TimerManager *manager)
+{
+}
+
+bool Timer::Comparator::operator()(const std::shared_ptr<Timer> &lhs, const std::shared_ptr<Timer> &rhs) const
+{
+}
+
 TimerManager::TimerManager()
 {
 }
@@ -38,5 +46,9 @@ void TimerManager::listExpiredCb(std::vector<std::function<void()>> &cbs)
 }
 
 bool TimerManager::hasTimer()
+{
+}
+
+void TimerManager::addTimer(std::shared_ptr<Timer> timer)
 {
 }

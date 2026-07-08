@@ -42,6 +42,8 @@ private:
     uint64_t m_ms = 0;
 
     // 绝对超时时间。
+    // 使用 steady_clock 而不是 system_clock。steady_clock 是单调递增时钟，不受系统时间修改（如手动调时、NTP 校时）影响，适合用于定时器、超时检测等场景；system_clock 表示真实系统时间，更适合日志、日期时间等用途。
+    std::chrono::time_point<std::chrono::steady_clock> m_next;
     std::chrono::time_point<std::chrono::steady_clock> m_next;
 
     // 超时时触发的回调函数。
@@ -98,19 +100,13 @@ protected:
 
 private:
 
-    // 当系统时间改变时 -> 调用该函数。
-    bool detectClockRollover();
-
-
-private:
-
     std::shared_mutex m_mutex;
 
     // 时间堆。存储所有的 Timer 对象，并使用 Timer::Comparator 进行排序，确保最早超时的 Timer 在最前面。
     // 使用 std::set（底层是红黑树，这里是拿来模拟最小堆）而不是 std::priority_queue（底层是堆）。两者都能 O(logN) 插入、O(1) 获取最早超时的 Timer（begin()/top()），但 std::set 支持查找、删除和重新插入任意 Timer，便于实现 cancel()、refresh()、reset() 等操作，而 priority_queue 只能操作堆顶元素。
     std::set<std::shared_ptr<Timer>, Timer::Comparator> m_timers;
 
-    // 在下次 getNextTime() 执行前 onTimerInsertedAtFront() 是否已经被触发了 -> 在此过程中   onTimerInsertedAtFront() 只执行一次。防止重复调用。
+    // 在下次 getNextTimer() 执行前 onTimerInsertedAtFront() 是否已经被触发了 -> 在此过程中   onTimerInsertedAtFront() 只执行一次。防止重复调用。
     bool m_tickled = false;
 };
 
