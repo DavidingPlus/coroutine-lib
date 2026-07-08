@@ -116,6 +116,16 @@ std::shared_ptr<Timer> TimerManager::addTimer(uint64_t ms, std::function<void()>
 
 std::shared_ptr<Timer> TimerManager::addConditionTimer(uint64_t ms, std::function<void()> cb, std::weak_ptr<void> weakCond, bool recurring)
 {
+    return addTimer(
+        ms,
+        // 这里不能按引用捕获（[&]），因为 addConditionTimer() 返回后，weakCond 和 cb 都会离开作用域，Lambda 中保存的引用会变成悬空引用，定时器到期执行时会产生未定义行为。应按值捕获（[weakCond, cb]），让 Lambda 自己保存一份 weakCond 和 cb，保证它们在 Timer 生命周期内一直有效。
+        // 也可以使用 std::bind(&OnTimer, weakCond, cb)，std::bind 同样会按值保存参数，本质上与按值捕获的 Lambda 作用相同，都是为了保证回调执行时对象仍然有效。
+        [weakCond = std::move(weakCond), cb = std::move(cb)]()
+        {
+            // 判断 weakCond 对应对象的生命周期是否还在，决定是否执行这个回调。
+            if (weakCond.lock()) cb();
+        },
+        recurring);
 }
 
 uint64_t TimerManager::getNextTimer()
@@ -154,6 +164,7 @@ uint64_t TimerManager::getNextTimer()
 
 void TimerManager::listExpiredCb(std::vector<std::function<void()>> &cbs)
 {
+    // TODO
 }
 
 bool TimerManager::hasTimer()
@@ -183,9 +194,6 @@ void TimerManager::addTimer(std::shared_ptr<Timer> timer)
         if (atFrontNeedTickle) m_tickled = true;
     }
 
-    if (atFrontNeedTickle)
-    {
-        // 唤醒调度线程。具体实现由子类重写，用于唤醒阻塞在 epoll_wait 等待中的线程。
-        onTimerInsertedAtFront();
-    }
+    // 唤醒调度线程。具体实现由子类重写，用于唤醒阻塞在 epoll_wait 等待中的线程。同样不能锁上加锁，所以放在锁生命周期外面。
+    if (atFrontNeedTickle) onTimerInsertedAtFront();
 }

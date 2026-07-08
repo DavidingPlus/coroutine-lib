@@ -78,7 +78,9 @@ public:
     // 将其加入 TimerManager 管理。返回 shared_ptr，方便用户后续调用 cancel、refresh、reset 等接口操作该 Timer。
     std::shared_ptr<Timer> addTimer(uint64_t ms, std::function<void()> cb, bool recurring = false);
 
-    // 添加条件 timer。weakCond 条件。
+    // 添加条件 timer。
+    // 条件定时器用于解决回调依赖对象生命周期的问题。即使定时器到期，如果关联对象已经提前销毁（例如连接断开、Session 被释放），则不会执行回调，避免访问无效对象或执行无意义的任务。
+    // weak_ptr 是 shared_ptr 的弱引用，不会增加对象的引用计数，也不会影响对象生命周期。使用 lock() 可以尝试获得一个 shared_ptr。若对象仍然存在，lock() 返回有效的 shared_ptr；对象已销毁，lock() 返回 nullptr。常用于判断对象是否仍然存活，避免访问已经释放的对象。
     std::shared_ptr<Timer> addConditionTimer(uint64_t ms, std::function<void()> cb, std::weak_ptr<void> weakCond, bool recurring = false);
 
     // 拿到堆中最近的超时时间。
