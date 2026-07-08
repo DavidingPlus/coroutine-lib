@@ -164,7 +164,32 @@ uint64_t TimerManager::getNextTimer()
 
 void TimerManager::listExpiredCb(std::vector<std::function<void()>> &cbs)
 {
-    // TODO
+    auto now = std::chrono::steady_clock::now();
+    std::unique_lock<std::shared_mutex> writeLock(m_mutex);
+
+    // 由于 Timer 按超时时间升序排列，因此只需要不断检查集合中的第一个 Timer。当第一个 Timer 未超时时，后面的 Timer 一定也未超时，可以直接结束循环。
+    while (!m_timers.empty() && (*m_timers.begin())->m_next <= now)
+    {
+        // 取出最早超时的 Timer。
+        auto timer = *m_timers.begin();
+        // 从 Timer 集合中移除。
+        m_timers.erase(m_timers.begin());
+        // 收集回调，由调度器统一执行。这里仅负责收集回调，不直接执行，避免长时间持有锁。
+        cbs.emplace_back(timer->m_cb);
+
+        // 循环 Timer：根据当前时间重新计算下一次触发时间，并重新加入 Timer 集合。
+        if (timer->m_recurring)
+        {
+
+            timer->m_next = now + std::chrono::milliseconds(timer->m_ms);
+            m_timers.insert(timer);
+        }
+        // 单次 Timer：清空回调，标记 Timer 已失效。
+        else
+        {
+            timer->m_cb = nullptr;
+        }
+    }
 }
 
 bool TimerManager::hasTimer()
