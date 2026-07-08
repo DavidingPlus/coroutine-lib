@@ -99,10 +99,19 @@ bool Timer::reset(uint64_t ms, bool fromNow)
 
 bool Timer::Comparator::operator()(const std::shared_ptr<Timer> &lhs, const std::shared_ptr<Timer> &rhs) const
 {
-    assert(lhs != nullptr && rhs != nullptr);
-
-
-    return lhs->m_next < rhs->m_next;
+    // 先比较触发的绝对时间，相同则返回。如果绝对时间相同，则比较地址。
+    if (lhs->m_next < rhs->m_next)
+    {
+        return true;
+    }
+    else if (lhs->m_next > rhs->m_next)
+    {
+        return false;
+    }
+    else
+    {
+        return lhs.get() < rhs.get();
+    }
 }
 
 std::shared_ptr<Timer> TimerManager::addTimer(uint64_t ms, std::function<void()> cb, bool recurring)
@@ -130,7 +139,8 @@ std::shared_ptr<Timer> TimerManager::addConditionTimer(uint64_t ms, std::functio
 
 uint64_t TimerManager::getNextTimer()
 {
-    std::unique_lock<std::shared_mutex> writeLock(m_mutex);
+    // m_tickled 是原子变量。下面只写 m_tickled，读 m_timers，因此这里只需要读写锁就行。
+    std::shared_lock<std::shared_mutex> readLock(m_mutex);
 
     // 重置 m_tickled。问题：为什么在 getNextTimer() 中需要重置 mtickled = false？
     // m_tickled是一个状态标志，其核心作用是防止重复唤醒。当一个新的定时器被插入到时间堆的堆顶（即它成为了最早超时的任务）时，说明原有的 epoll_wait 超时时间已经不再准确，需要触发 onTimerlnsertedAtFront()（通常是调用 tickle()）来唤醒调度线程，使其重新计算超时时间。
@@ -184,7 +194,7 @@ void TimerManager::listExpiredCb(std::vector<std::function<void()>> &cbs)
             timer->m_next = now + std::chrono::milliseconds(timer->m_ms);
             m_timers.insert(timer);
         }
-        // 单次 Timer：清空回调，标记 Timer 已失效。
+        // 单次 Timer：清空回调函数，标记 Timer 已失效，释放其可能持有的资源。
         else
         {
             timer->m_cb = nullptr;
