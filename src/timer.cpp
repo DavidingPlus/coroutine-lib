@@ -120,6 +120,36 @@ std::shared_ptr<Timer> TimerManager::addConditionTimer(uint64_t ms, std::functio
 
 uint64_t TimerManager::getNextTimer()
 {
+    std::unique_lock<std::shared_mutex> writeLock(m_mutex);
+
+    // 重置 m_tickled。问题：为什么在 getNextTimer() 中需要重置 mtickled = false？
+    // m_tickled是一个状态标志，其核心作用是防止重复唤醒。当一个新的定时器被插入到时间堆的堆顶（即它成为了最早超时的任务）时，说明原有的 epoll_wait 超时时间已经不再准确，需要触发 onTimerlnsertedAtFront()（通常是调用 tickle()）来唤醒调度线程，使其重新计算超时时间。
+    // 当一个线程被唤醒以后，他需要调用 getNextTimer() 重新获取超时时间。在 getNextTimer() 函数中，调度线程已经处于“醒来”并准备重新计算超时值的状态。此时已经执行过一次唤醒逻辑了，需要将 m_tickled 重置为 false，是为了确保后续如果有更新的、更早的定时器插入时，能够再次触发 onTimerlnsertedAtFront() 逻辑。如果不重置，后续更早的定时器插入将无法唤醒线程，导致调度延迟。
+    m_tickled = false;
+
+    // 返回最大值。这里不能直接调用 hasTimer()，不能锁上加锁。
+    if (m_timers.empty()) return ~0ull;
+
+    // 获取当前系统时间。
+    auto now = std::chrono::steady_clock::now();
+    // 获取最小时间堆中的第一个超时定时器判断超时。
+    auto time = (*m_timers.begin())->m_next;
+
+    // 判断当前时间是否已经超过了下一个定时器的超时时间。
+    if (now >= time)
+    {
+        // 已经有 timer 超时，直接返回。
+        return 0;
+    }
+    else
+    {
+        // 计算从当前时间到下一个定时器超时时间的时间差，结果是一个 std::chrono::milliseconds 对象。
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(time - now);
+
+
+        // 将时间差转换为毫秒，并返回这个值。
+        return static_cast<uint64_t>(duration.count());
+    }
 }
 
 void TimerManager::listExpiredCb(std::vector<std::function<void()>> &cbs)
@@ -128,6 +158,10 @@ void TimerManager::listExpiredCb(std::vector<std::function<void()>> &cbs)
 
 bool TimerManager::hasTimer()
 {
+    std::shared_lock<std::shared_mutex> readLock(m_mutex);
+
+
+    return !m_timers.empty();
 }
 
 void TimerManager::addTimer(std::shared_ptr<Timer> timer)

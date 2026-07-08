@@ -108,8 +108,7 @@ private:
     // 使用 std::set（底层是红黑树，这里是拿来模拟最小堆）而不是 std::priority_queue（底层是堆）。两者都能 O(logN) 插入、O(1) 获取最早超时的 Timer（begin()/top()），但 std::set 支持查找、删除和重新插入任意 Timer，便于实现 cancel()、refresh()、reset() 等操作，而 priority_queue 只能操作堆顶元素。
     std::set<std::shared_ptr<Timer>, Timer::Comparator> m_timers;
 
-    // 标识当前最早超时 Timer 是否已经触发过唤醒通知。当新的 Timer 成为最早超时定时器时，说明它比原来的 Timer 更早触发。此时可能需要唤醒正在等待超时的调度线程，重新计算等待时间，因此有更紧急的任务需要处理，不能只关注原来的任务。
-    // 通过 onTimerInsertedAtFront() 唤醒调度线程。在调度线程重新调用 getNextTimer() 之前，只允许触发一次唤醒，避免重复通知。
+    // 标识当前最早超时 Timer 是否已经触发过唤醒通知。当新的 Timer 成为最早超时定时器时，说明它比原来的 Timer 更早触发。此时可能需要唤醒正在等待超时的调度线程，重新计算等待时间，因此有更紧急的任务需要处理，不能只关注原来的任务。通过 onTimerInsertedAtFront() 唤醒调度线程，唤醒的线程会重新调用 getNextTimer() 函数。在调度线程重新调用 getNextTimer() 之前，只允许触发一次唤醒，避免重复通知。
     bool m_tickled = false;
 };
 
