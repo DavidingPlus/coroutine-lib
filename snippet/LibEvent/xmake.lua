@@ -1,0 +1,11 @@
+target("LibEvent1")
+    set_kind("binary")
+    add_files("main1.cpp")
+    add_links("event")
+target_end()
+
+target("LibEvent2")
+    set_kind("binary")
+    add_files("main2.cpp")
+    add_links("event")
+target_end()

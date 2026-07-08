@@ -34,7 +34,7 @@ private:
 
 public:
 
-    // 用于创建指定回调函数、栈大小和 runInScheduler 本协程是否参与调度器调度，默认为 true。stacksize 传入 0 代表自动分配栈空间大小。
+    // 用于创建指定回调函数、栈大小和 runInScheduler 本协程是否参与调度器调度，默认为 true（这个概念是和调度器 scheduler 连接在一起的，结合调度器理解）。stacksize 传入 0 代表自动分配栈空间大小。
     Fiber(std::function<void()> cb, size_t stacksize = 0, bool runInScheduler = true);
 
     virtual ~Fiber();
