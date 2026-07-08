@@ -14,7 +14,7 @@ bool Timer::cancel()
     // 先标记 m_cb 为空，表示这个定时器失效了，不能再执行回调。即使后续删除失败了，Timer 也不会执行。
     if (!m_cb)
     {
-        if (COROUTINE_CONFIG_DEBUG) std::cout << "Timer::cancel(): m_cb is already nullptr" << std::endl;
+        if (COROUTINE_CONFIG_DEBUG) std::cout << "Timer::cancel(): m_cb is nullptr, cannot cancel" << std::endl;
 
 
         return false;
@@ -39,7 +39,7 @@ bool Timer::refresh()
 
     if (!m_cb)
     {
-        if (COROUTINE_CONFIG_DEBUG) std::cout << "Timer::refresh(): m_cb is nullptr" << std::endl;
+        if (COROUTINE_CONFIG_DEBUG) std::cout << "Timer::refresh(): m_cb is nullptr, cannot refresh" << std::endl;
 
 
         return false;
@@ -72,7 +72,7 @@ bool Timer::reset(uint64_t ms, bool fromNow)
 
         if (!m_cb) // 如果为空，说明该定时器已经被取消或未初始化，因此无法重置。
         {
-            if (COROUTINE_CONFIG_DEBUG) std::cout << "Timer::reset(): m_cb is nullptr" << std::endl;
+            if (COROUTINE_CONFIG_DEBUG) std::cout << "Timer::reset(): m_cb is nullptr, cannot reset" << std::endl;
 
 
             return false;
@@ -132,7 +132,14 @@ std::shared_ptr<Timer> TimerManager::addConditionTimer(uint64_t ms, std::functio
         [weakCond = std::move(weakCond), cb = std::move(cb)]()
         {
             // 判断 weakCond 对应对象的生命周期是否还在，决定是否执行这个回调。
-            if (weakCond.lock()) cb();
+            if (weakCond.lock())
+            {
+                cb();
+            }
+            else
+            {
+                if (COROUTINE_CONFIG_DEBUG) std::cout << "TimerManager::addConditionTimer(): object has expired, skip callback" << std::endl;
+            }
         },
         recurring);
 }
