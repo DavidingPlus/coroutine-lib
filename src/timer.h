@@ -70,11 +70,12 @@ class TimerManager
 
 public:
 
-    TimerManager();
+    TimerManager() = default;
 
-    virtual ~TimerManager();
+    virtual ~TimerManager() = default;
 
     // 添加 timer。ms 定时器执行间隔时间。cb 定时器回调函数。recurring 是否循环定时器。
+    // 将其加入 TimerManager 管理。返回 shared_ptr，方便用户后续调用 cancel、refresh、reset 等接口操作该 Timer。
     std::shared_ptr<Timer> addTimer(uint64_t ms, std::function<void()> cb, bool recurring = false);
 
     // 添加条件 timer。weakCond 条件。
@@ -95,7 +96,7 @@ protected:
     // 当一个最早的 timer 加入到堆中 -> 调用该函数。
     virtual void onTimerInsertedAtFront() {}
 
-    // 添加 timer。
+    // 添加 timer。这个私有函数是方便内部和 Timer 使用的，外部使用共有函数的那个重载版本。
     void addTimer(std::shared_ptr<Timer> timer);
 
 
@@ -107,7 +108,8 @@ private:
     // 使用 std::set（底层是红黑树，这里是拿来模拟最小堆）而不是 std::priority_queue（底层是堆）。两者都能 O(logN) 插入、O(1) 获取最早超时的 Timer（begin()/top()），但 std::set 支持查找、删除和重新插入任意 Timer，便于实现 cancel()、refresh()、reset() 等操作，而 priority_queue 只能操作堆顶元素。
     std::set<std::shared_ptr<Timer>, Timer::Comparator> m_timers;
 
-    // 在下次 getNextTimer() 执行前 onTimerInsertedAtFront() 是否已经被触发了 -> 在此过程中   onTimerInsertedAtFront() 只执行一次。防止重复调用。
+    // 标识当前最早超时 Timer 是否已经触发过唤醒通知。当新的 Timer 成为最早超时定时器时，说明它比原来的 Timer 更早触发。此时可能需要唤醒正在等待超时的调度线程，重新计算等待时间，因此有更紧急的任务需要处理，不能只关注原来的任务。
+    // 通过 onTimerInsertedAtFront() 唤醒调度线程。在调度线程重新调用 getNextTimer() 之前，只允许触发一次唤醒，避免重复通知。
     bool m_tickled = false;
 };
 

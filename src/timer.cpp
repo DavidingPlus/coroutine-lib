@@ -105,16 +105,13 @@ bool Timer::Comparator::operator()(const std::shared_ptr<Timer> &lhs, const std:
     return lhs->m_next < rhs->m_next;
 }
 
-TimerManager::TimerManager()
-{
-}
-
-TimerManager::~TimerManager()
-{
-}
-
 std::shared_ptr<Timer> TimerManager::addTimer(uint64_t ms, std::function<void()> cb, bool recurring)
 {
+    std::shared_ptr<Timer> timer(new Timer(ms, cb, recurring, this));
+    addTimer(timer);
+
+
+    return timer;
 }
 
 std::shared_ptr<Timer> TimerManager::addConditionTimer(uint64_t ms, std::function<void()> cb, std::weak_ptr<void> weakCond, bool recurring)
@@ -135,4 +132,26 @@ bool TimerManager::hasTimer()
 
 void TimerManager::addTimer(std::shared_ptr<Timer> timer)
 {
+    // 标识插入的 Timer 是否成为当前最早超时的定时器，并且需要唤醒其他正在等待超时的调度线程。
+    bool atFrontNeedTickle = false;
+
+    {
+        std::unique_lock<std::shared_mutex> writeLock(m_mutex);
+
+        // 将 Timer 插入时间集合。m_timers 使用 set 按 m_next 排序，因此 begin() 始终是最早触发的 Timer。
+        auto it = m_timers.insert(timer).first;
+
+        // 如果新插入的 Timer 位于集合最前面，说明它比原来的 Timer 更早触发。此时可能需要唤醒正在等待超时的调度线程，重新计算等待时间，因此有更紧急的任务需要处理，不能只关注原来的任务。
+        // m_tickled 用于保证只触发一次唤醒操作，避免重复通知。
+        atFrontNeedTickle = (m_timers.begin() == it) && !m_tickled;
+
+        // 标记已经通知过，直到调度线程处理并重新调用 getNextTimer() 后清除。
+        if (atFrontNeedTickle) m_tickled = true;
+    }
+
+    if (atFrontNeedTickle)
+    {
+        // 唤醒调度线程。具体实现由子类重写，用于唤醒阻塞在 epoll_wait 等待中的线程。
+        onTimerInsertedAtFront();
+    }
 }
