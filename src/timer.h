@@ -12,6 +12,7 @@
 class TimerManager;
 
 
+// Timer 使用 shared_ptr 管理生命周期。Timer 在 refresh/reset 时会从 TimerManager 的容器中删除并重新插入，但不会创建新的 Timer 对象。shared_ptr 可以保证 Timer 在被 TimerManager 移除后，如果仍有外部引用，对象不会立即析构，避免出现悬空指针问题。
 class Timer : public std::enable_shared_from_this<Timer>
 {
     friend class TimerManager;
@@ -21,16 +22,17 @@ public:
     // 从时间堆中删除 timer。
     bool cancel();
 
-    // 刷新 timer。
+    // 刷新 timer。保持原来的超时时间间隔不变，仅将下一次触发时间重新设置为当前时间 + m_ms。常用于延长定时器生命周期，例如连接保活。
     bool refresh();
 
-    // 重设 timer 的超时时间。ms 定时器执行间隔时间（ms），fromNow 是否从当前时间开始计算。
+    // 重设 timer 的超时时间。ms 表示新的超时间隔，fromNow 表示是否从当前时间开始重新计算：true：从当前时间开始计算新的超时时间；false：保持原来的起始时间，仅修改时间间隔。可用于动态调整定时器周期。
     bool reset(uint64_t ms, bool fromNow);
 
 
 private:
 
-    Timer(uint64_t ms, std::function<void()> cb, bool recurring, TimerManager *manager);
+    Timer(uint64_t ms, std::function<void()> cb, bool recurring, TimerManager *manager)
+        : m_ms(ms), m_cb(std::move(cb)), m_recurring(recurring), m_manager(manager) { m_next = std::chrono::steady_clock::now() + std::chrono::milliseconds(m_ms); }
 
 
 private:
@@ -38,12 +40,11 @@ private:
     // 是否循环。
     bool m_recurring = false;
 
-    // 超时时间。
+    // 定时器执行间隔（ms），用于循环定时器中重新计算下一次触发时间。对于单次定时器就是超时时间。
     uint64_t m_ms = 0;
 
-    // 绝对超时时间。
+    // 下一次触发的绝对时间。
     // 使用 steady_clock 而不是 system_clock。steady_clock 是单调递增时钟，不受系统时间修改（如手动调时、NTP 校时）影响，适合用于定时器、超时检测等场景；system_clock 表示真实系统时间，更适合日志、日期时间等用途。
-    std::chrono::time_point<std::chrono::steady_clock> m_next;
     std::chrono::time_point<std::chrono::steady_clock> m_next;
 
     // 超时时触发的回调函数。
