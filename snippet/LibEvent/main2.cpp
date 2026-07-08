@@ -31,6 +31,8 @@ int main()
         readCb,
         nullptr);
 
+    event_add(stdinEv, nullptr);
+
     // 注册 timer 事件。
     event *timerEv = event_new(
         base,
@@ -38,8 +40,6 @@ int main()
         EV_TIMEOUT | EV_PERSIST,
         timerCb,
         nullptr);
-
-    event_add(stdinEv, nullptr);
 
     timeval tv = {
         .tv_sec = 1,
