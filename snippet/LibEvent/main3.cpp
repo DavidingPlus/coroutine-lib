@@ -1,12 +1,18 @@
 #include <iostream>
 
-#include <event2/event.h>
-
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <unistd.h>
+
+#include <event2/event.h>
+
+
+struct ClientContext
+{
+    event *ev;
+};
 
 
 void setNonblock(int fd)
@@ -16,10 +22,10 @@ void setNonblock(int fd)
 
 void clientReadCb(evutil_socket_t fd, short events, void *arg)
 {
+    ClientContext *ctx = static_cast<ClientContext *>(arg);
     char buffer[1024];
 
     int n = read(fd, buffer, sizeof(buffer));
-
     if (n > 0)
     {
         std::cout << "client recv: " << std::string(buffer, n) << std::endl;
@@ -39,7 +45,14 @@ void clientReadCb(evutil_socket_t fd, short events, void *arg)
         // 客户端关闭连接。
         std::cout << "client closed" << std::endl;
 
+        // 删除事件。
+        event_del(ctx->ev);
+        // 释放事件。
+        event_free(ctx->ev);
+
         close(fd);
+
+        delete ctx;
     }
     else
     {
@@ -47,37 +60,52 @@ void clientReadCb(evutil_socket_t fd, short events, void *arg)
         if (EAGAIN == errno || EWOULDBLOCK == errno) return;
 
         perror("read");
+
+        event_del(ctx->ev);
+        event_free(ctx->ev);
+
         close(fd);
+
+        delete ctx;
     }
 }
 
 void acceptCb(evutil_socket_t fd, short events, void *arg)
 {
-    sockaddr_in client_addr{};
-    socklen_t len = sizeof(client_addr);
-
-    int clientFd = accept(fd, (sockaddr *)&client_addr, &len);
-    if (clientFd < 0)
-    {
-        perror("accept");
-        return;
-    }
-
-    // 设置非阻塞。
-    setNonblock(clientFd);
-
-    std::cout << "new client connected, fd=" << clientFd << std::endl;
-
     event_base *base = static_cast<event_base *>(arg);
 
-    event *client_event = event_new(
-        base,
-        clientFd,
-        EV_READ | EV_PERSIST,
-        clientReadCb,
-        nullptr);
+    while (true)
+    {
+        sockaddr_in client_addr{};
+        socklen_t len = sizeof(client_addr);
 
-    event_add(client_event, nullptr);
+        int clientFd = accept(fd, (sockaddr *)&client_addr, &len);
+        if (clientFd < 0)
+        {
+            // 非阻塞 accept：没有更多连接，退出循环。
+            if (EAGAIN == errno || EWOULDBLOCK == errno) break;
+
+            perror("accept");
+            return;
+        }
+
+        // 设置非阻塞。
+        setNonblock(clientFd);
+
+        std::cout << "new client connected, fd=" << clientFd << std::endl;
+
+        // 创建客户端上下文。
+        ClientContext *ctx = new ClientContext;
+
+        ctx->ev = event_new(
+            base,
+            clientFd,
+            EV_READ | EV_PERSIST,
+            clientReadCb,
+            ctx);
+
+        event_add(ctx->ev, nullptr);
+    }
 }
 
 
