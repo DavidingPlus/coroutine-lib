@@ -10,8 +10,16 @@ target("LibEvent2")
     add_links("event")
 target_end()
 
-target("LibEvent3")
+target("LibEvent3-Server")
     set_kind("binary")
-    add_files("main3.cpp")
+    add_files("main3_server.cpp")
     add_links("event")
+target_end()
+
+add_requires("gtest")
+
+target("LibEvent3-Client")
+    set_kind("binary")
+    add_files("main3_client.cpp")
+    add_packages("gtest")
 target_end()
