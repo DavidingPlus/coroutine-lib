@@ -72,13 +72,19 @@ private:
 
 public:
 
+    // 获取当前线程的调度器对象，然后将其动态转换为 IOManager* 类型，如果转换成功，表示当前线程的调度器对象确实是一个 IOManager 对象。否则，如果是转化的是指针类型返回 nullptr，引用类型抛出 std::bad_cast 异常。
+    static IOManager *GetThis() { return dynamic_cast<IOManager *>(Scheduler::GetThis()); }
+
+
+public:
+
     // 允许设置 threads 线程数量，use_caller 是否讲主线程或调度线程包含进行，name 调度器的名字。
     IOManager(size_t threads = 1, bool use_caller = true, const std::string &name = "IOManager");
 
-    ~IOManager();
+    virtual ~IOManager();
 
     // 添加一个事件到文件描述符 fd 上，并关联一个回调函数 cb。
-    int addEvent(int fd, Event event, std::function<void()> cb = nullptr); // 添加一个事件到文件描述符 fd 上，并关联一个回调函数 cb。
+    int addEvent(int fd, Event event, std::function<void()> cb = nullptr);
 
     // 删除文件描述符 fd 上的某个事件。
     bool delEvent(int fd, Event event);
@@ -89,8 +95,6 @@ public:
 
     // 取消文件描述符 fd 上的所有事件，并触发所有回调函数。
     bool cancelAll(int fd);
-
-    static IOManager *GetThis();
 
 
 protected:
