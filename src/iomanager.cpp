@@ -38,7 +38,7 @@ void IOManager::FdContext::triggerEvent(Event event)
 
     // 清理该事件，表示不再关注，也就是说，注册 IO 事件是一次性的，如果想持续关注某个 Socket fd 的读写事件，那么每次触发事件后都要重新添加。
     // Event 使用位标志表示多个事件。0000 NONE，0001 READ，0100 WRITE。因此可以通过按位与 ~static_cast<int>(event) 清除指定 bit。
-    events = (Event)(static_cast<int>(events) & ~static_cast<int>(event));
+    events = static_cast<Event>(static_cast<int>(events) & ~static_cast<int>(event));
 
     // 获取触发事件对应的上下文信息。
     EventContext &ctx = getEventContext(event);
@@ -154,6 +154,7 @@ IOManager::~IOManager()
     }
 }
 
+// addEvent、delEvent、cancelEvent、cancelAll 这几个函数的代码架子是一样的，仅有细节不同。可对比理解。
 int IOManager::addEvent(int fd, Event event, std::function<void()> cb)
 {
     // 查找 FdContext 对象。
@@ -231,7 +232,6 @@ int IOManager::addEvent(int fd, Event event, std::function<void()> cb)
     return 0;
 }
 
-// 所有的步骤和上面的 addevent() 添加事件是类似的，可以对比看。
 bool IOManager::delEvent(int fd, Event event)
 {
     FdContext *fdCtx = nullptr;
@@ -289,6 +289,52 @@ bool IOManager::delEvent(int fd, Event event)
 
 bool IOManager::cancelEvent(int fd, Event event)
 {
+    FdContext *fdCtx = nullptr;
+
+    std::shared_lock<std::shared_mutex> readLock(m_mutex);
+    if (fd < static_cast<int>(m_fdContexts.size()))
+    {
+        fdCtx = m_fdContexts[fd];
+
+        readLock.unlock();
+    }
+    else
+    {
+        readLock.unlock();
+
+
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(fdCtx->mutex);
+
+    if (!(static_cast<int>(fdCtx->events) & static_cast<int>(event))) return false;
+
+    Event newEvents = static_cast<Event>(static_cast<int>(fdCtx->events) & ~static_cast<int>(event));
+    int op = static_cast<bool>(newEvents) ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+
+    epoll_event epevent;
+    epevent.events = EPOLLET | static_cast<int>(newEvents);
+    epevent.data.ptr = fdCtx;
+
+    if (epoll_ctl(m_epfd, op, fd, &epevent))
+    {
+        std::cerr << "cancelEvent::epoll_ctl() failed: " << strerror(errno) << '\n';
+
+
+        return false;
+    }
+
+    --m_pendingEventCount;
+
+    // 这里不需要对 fdCtx->events 赋值，因为 triggerEvent() 函数会自动清理要触发的事件，提前赋值反而会导致 triggerEvent() 中的断言失败。
+    // fdCtx->events = newEvents;
+
+    // 触发事件对应的回调任务。
+    fdCtx->triggerEvent(event);
+
+
+    return true;
 }
 
 bool IOManager::cancelAll(int fd)

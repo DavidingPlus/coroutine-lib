@@ -86,11 +86,12 @@ public:
     // 为一个 contextresize() 分配好的 fd，添加一个 event 事件，并在事件触发时执行指定的回调函数（cb）或回调协程。具体的触发是在 triggerEvent()。
     int addEvent(int fd, Event event, std::function<void()> cb = nullptr);
 
-    // 删除文件描述符 fd 上的某个事件。
+    // 删除文件描述符 fd 上的某个事件，但是不触发回调函数。
     bool delEvent(int fd, Event event);
 
-    // 取消文件描述符上的某个事件，并触发其回调函数。
+    // 取消文件描述符 fd 上的某个事件，并触发其回调函数。
     // IO 协程调度器支持取消事件。取消事件表示不关心某个 fd 的某个事件了，如果某个 fd 的可读或可写事件都被取消了，那这个 fd 会从调度器的 epoll_wait 中删除。支持使用 IO 事件调度，针对套接字描述符，将描述符注册可读和可写事件的回调函数，当事件触发时执行对应的回调函数。针对定时器，处理定时的任务主要是处理 sleep、usleep 等。
+    // 相比 delEvent() 不同在于删除事件后，还需要将删除的事件直接交给 trigger() 函数放入到协程调度器中进行触发。
     bool cancelEvent(int fd, Event event);
 
     // 取消文件描述符 fd 上的所有事件，并触发所有回调函数。
