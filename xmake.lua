@@ -16,7 +16,6 @@ set_configdir("$(builddir)/config/")
 add_configfiles("src/config.h.in")
 
 add_includedirs("$(builddir)/config/")
-add_installfiles("$(builddir)/config/config.h", {prefixdir = "include"})
 
 
 option("with_gtest")
@@ -69,7 +68,6 @@ target("coroutine-lib")
     add_files("src/**.cpp")
     add_public_headers()
     add_includedirs("src", {public = true})
-    add_installfiles("$(builddir)/$(plat)/$(arch)/$(mode)/.version")
 
     before_build(function (target)
         io.writefile(path.join(path.directory(target:targetdir()), ".version"), version)
@@ -77,8 +75,18 @@ target("coroutine-lib")
 
     before_install(function (target)
         os.tryrm(target:installdir())
+        os.mkdir(target:installdir())
 
-        io.writefile(path.join(path.directory(target:targetdir()), ".version"), version)
+        os.cp("$(builddir)/$(plat)/$(arch)/$(mode)/.version", target:installdir())
+        os.cp("$(builddir)/config/config.h", path.join(target:installdir(), "include/config.h"))
+    end)
+
+    before_package(function (target)
+        os.tryrm(target:packagedir())
+        os.mkdir(target:packagedir())
+
+        os.cp("$(builddir)/$(plat)/$(arch)/$(mode)/.version", target:packagedir())
+        os.cp("$(builddir)/config/config.h", path.join(target:packagedir(), "$(plat)/$(arch)/$(mode)/include/config.h"))
     end)
 
     apply_current_platform_target_config()
