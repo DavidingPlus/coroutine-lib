@@ -22,7 +22,7 @@
  *
  *   4. 继承体系中的类型转换
  *      - Derived* -> Base*（向上转型，安全）
- *      - Base* -> Derived*（向下转型，不检查对象真实类型，错误使用会导致未定义行为）
+ *      - Base* -> Derived*（向下转型，不检查对象真实类型，错误使用会导致未定义行为。使用 dynamic_cast 做运行期类型检查来保证向下转型的正确性）
  *      - 引用(Base& / Derived&)同理。
  *
  * 特点：
@@ -152,6 +152,8 @@ TEST(StaticCastTest, UpCast)
 
 TEST(StaticCastTest, DownCast)
 {
+    // 如果这里 d 是基类的话，下面的 child 代码，编译仍然能通过，因为编译器只知道 Base 和 Derived 有继承关系，但是他无法知道运行时 child 究竟指向谁，他不会做运行时检查，会直接转换。如果这样做的话就会访问不存在的内存发生未定义行为。
+    // dynamic_cast 会在运行时借助 RTTI 检查 child 对象究竟是不是 Derived，因此更加安全。
     Derived d;
 
     Base *base = &d;
