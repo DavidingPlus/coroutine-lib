@@ -1,6 +1,7 @@
 #include "iomanager.h"
 
 #include <cassert>
+#include <cstring>
 #include <exception>
 
 #include <sys/epoll.h>
@@ -155,6 +156,79 @@ IOManager::~IOManager()
 
 int IOManager::addEvent(int fd, Event event, std::function<void()> cb)
 {
+    // 查找 FdContext 对象。
+    FdContext *fdCtx = nullptr;
+
+    // 1. 如果说传入的 fd 在数组里面，查找然后初始化 FdContext 的对象。因为没有修改类的内部成员，因此使用读锁。
+    std::shared_lock<std::shared_mutex> readLock(m_mutex);
+    if (fd < static_cast<int>(m_fdContexts.size()))
+    {
+        fdCtx = m_fdContexts[fd];
+
+        readLock.unlock();
+    }
+    // 2. 不存在则重新分配数组的 size 来初始化 FdContext 的对象。因为修改了 m_fdContexts，因此使用写锁。
+    else
+    {
+        readLock.unlock();
+        std::unique_lock<std::shared_mutex> writeLock(m_mutex);
+
+        contextResize(fd * 1.5);
+        fdCtx = m_fdContexts[fd];
+    }
+
+    // 找到或者创建 FdContext 的对象后，为 FdContext 加上互斥锁，确保 FdContext 的状态不会被其他线程修改。
+    // 注意：这里的锁是 FdContext 上下文对象自身的，和前面 IOManager 的读写锁不同，注意区分。
+    std::lock_guard<std::mutex> lock(fdCtx->mutex);
+
+    // 判断要添加的事件是否已经存在了？是就返回 -1，因为相同的事件不能重复添加。
+    if (static_cast<int>(fdCtx->events) & static_cast<int>(event)) return -1;
+
+    // epfd 第一次注册事件，需要 EPOLL_CTL_ADD；如果已经注册了其他事件（例如 READ），再添加 WRITE 时使用 EPOLL_CTL_MOD 修改监听事件。
+    int op = static_cast<bool>(fdCtx->events) ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
+    epoll_event epevent;
+    // 我们认为设计 Event 的取值与 EPOLLIN/EPOLLOUT 保持一致，因此可以直接作为 epoll_event.events 的位标志，可以使用按位或运算。
+    epevent.events = EPOLLET | static_cast<int>(fdCtx->events) | static_cast<int>(event);
+    // epoll_event 的 data 成员是一个用户自定义数据区，内核不会解析其中的内容，而是在事件触发时原样返回。这里将当前 fd 对应的 FdContext 指针保存到 data.ptr 中。当 epoll_wait() 返回事件时，可以直接通过 event.data.ptr 取回对应的 FdContext，从而快速获得该 fd 的读写事件、回调函数、协程以及调度器等信息，无需再根据 fd 去查找。相比只保存 fd（event.data.fd），保存 FdContext* 可以避免一次额外的查表操作，也是 libevent、libuv、muduo 等事件驱动框架的常见做法。
+    epevent.data.ptr = fdCtx;
+
+    // 将事件添加到 epoll 中。如果添加失败，打印错误信息并返回 -1。epoll_ctl() 成功返回 0，失败返回 -1。
+    if (epoll_ctl(m_epfd, op, fd, &epevent))
+    {
+        std::cerr << "addEvent::epoll_ctl() failed: " << strerror(errno) << std::endl;
+
+
+        return -1;
+    }
+
+    // 原子计数器，待处理的事件++；
+    ++m_pendingEventCount;
+
+    // 更新 FdContext 的 events 成员，记录当前的所有事件。注意 events 可以监听读和写的组合，如果 fdCtx->events 为 none,就相当于直接是 fdCtx->events = event
+    fdCtx->events = static_cast<Event>(static_cast<int>(fdCtx->events) | static_cast<int>(event));
+
+    // 设置 FdContext 中的事件上下文。
+    FdContext::EventContext &eventCtx = fdCtx->getEventContext(event);
+    // 确保 EventContext 中没有其他正在执行的调度器、协程或回调函数，也就是都为空。
+    assert(!eventCtx.scheduler && !eventCtx.fiber && !eventCtx.cb);
+    // 设置调度器为当前的调度器实例（Scheduler::GetThis()）。FdContext 本身只负责记录 fd 对应的读写事件及其回调信息，并不知道事件触发后应该交给哪个调度器执行。因此在注册事件时，需要记录当前线程正在运行的 Scheduler（通过 Scheduler::GetThis() 获取）。当 epoll_wait() 检测到该事件发生后，triggerEvent() 会通过保存的 scheduler 将对应的协程或回调重新加入调度队列，从而由正确的调度器负责恢复协程或执行回调。
+    // 为什么不直接使用 this？因为这里需要保存的是"当前线程实际运行的调度器"这一概念，而不是单纯保存当前 IOManager 对象。对于 IOManager 而言，this 和 Scheduler::GetThis() 在正常情况下通常指向同一个对象（IOManager 继承自 Scheduler），直接使用 this 也能够正常工作。但整个框架统一通过 Scheduler::GetThis() 获取当前线程绑定的调度器，更符合调度器的设计思想，也避免代码依赖具体的对象指针，保持接口风格一致。
+    eventCtx.scheduler = Scheduler::GetThis();
+
+    // 如果提供了回调函数 cb，则将其保存到 EventContext 中；否则，将当前正在运行的协程保存到 EventContext 中，并确保协程的状态是正在运行。
+    if (cb)
+    {
+        eventCtx.cb.swap(cb);
+    }
+    else
+    {
+        // 需要确保存在主协程。
+        eventCtx.fiber = Fiber::GetThis();
+        assert(Fiber::RUNNING == eventCtx.fiber->getState());
+    }
+
+
+    return 0;
 }
 
 bool IOManager::delEvent(int fd, Event event)
