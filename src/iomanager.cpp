@@ -339,6 +339,60 @@ bool IOManager::cancelEvent(int fd, Event event)
 
 bool IOManager::cancelAll(int fd)
 {
+    FdContext *fdCtx = nullptr;
+
+    std::shared_lock<std::shared_mutex> readLock(m_mutex);
+    if (fd < static_cast<int>(m_fdContexts.size()))
+    {
+        fdCtx = m_fdContexts[fd];
+
+        readLock.unlock();
+    }
+    else
+    {
+        readLock.unlock();
+
+
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(fdCtx->mutex);
+
+    if (!static_cast<int>(fdCtx->events)) return false;
+
+    // 删除所有的事件。
+    int op = EPOLL_CTL_DEL;
+    epoll_event epevent;
+    epevent.events = 0;
+    epevent.data.ptr = fdCtx;
+
+    if (epoll_ctl(m_epfd, op, fd, &epevent))
+    {
+        std::cerr << "cancelAll::epoll_ctl() failed: " << strerror(errno) << '\n';
+
+
+        return false;
+    }
+
+    // 根据 fd 当前注册的事件，依次触发对应事件。triggerEvent() 会负责清除 FdContext 中对应的事件状态，并将等待该事件的协程或回调函数重新加入调度队列。
+    Event oldEvents = fdCtx->events;
+    if (static_cast<int>(oldEvents) & static_cast<int>(Event::READ))
+    {
+        fdCtx->triggerEvent(Event::READ);
+
+        --m_pendingEventCount;
+    }
+    if (static_cast<int>(oldEvents) & static_cast<int>(Event::WRITE))
+    {
+        fdCtx->triggerEvent(Event::WRITE);
+
+        --m_pendingEventCount;
+    }
+
+    assert(Event::NONE == fdCtx->events);
+
+
+    return true;
 }
 
 void IOManager::tickle()
