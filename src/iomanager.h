@@ -83,7 +83,7 @@ public:
 
     virtual ~IOManager();
 
-    // 添加一个事件到文件描述符 fd 上，并关联一个回调函数 cb。
+    // 为一个 contextresize() 分配好的 fd，添加一个 event 事件，并在事件触发时执行指定的回调函数（cb）或回调协程。具体的触发是在 triggerEvent()。
     int addEvent(int fd, Event event, std::function<void()> cb = nullptr);
 
     // 删除文件描述符 fd 上的某个事件。
@@ -99,18 +99,18 @@ public:
 
 protected:
 
-    // 通知调度器有任务调度。写 pipe 让 idle 协程从 epoll_wait 退出，待 idle 协程 yield 之后 Scheduler::run 就可以调度其他任务。
+    // 通知调度器有任务调度。写 pipe 让 idle 协程从 epoll_wait 退出，待 idle 协程 yield 之后 Scheduler::run 就可以调度其他任务。重写了 Scheduler 的 tickle()，作用是检测到有空闲线程时，通过写入一个字符到管道（m_tickleFds[1]）中，唤醒那些等待任务的线程。
     void tickle() override;
 
-    // 判断调度器是否可以停止。判断条件是 Scheduler::stopping() 外加 IOManager 的 m_pendingEventCount 为 0，表示没有 IO 事件可调度。
+    // 判断调度器是否可以停止。判断条件是 Scheduler::stopping() 加 IOManager 的 m_pendingEventCount 为 0 以及没有定时器超时（~0ull == getNextTimer()），表示没有 IO 事件可调度。
     bool stopping() override;
 
     // 实际是 idle 协程只负责收集所有已触发的 fd 的回调函数并将其加⼊调度器的任务队列，真正的执⾏时机是 idle 协程退出后，调度器在下⼀轮调度时执⾏。这里也是 scheduler 的重写，当没有事件处理时，线程处于空闲状态时的处理逻辑。
     // IO 协程调度器在 idle 时会 epoll_wait 所有注册的 fd，如果有 fd 满足条件，epoll_wait 返回，从私有数据中拿到 fd 的上下文信息，并且将其加入调度器的任务队列。实际是 idle 协程只负责收集所有已触发的 fd 的回调函数并将其加入调度器的任务队列，真正的执行时机是 idle 协程退出后，调度器在下一轮调度时执行。
     void idle() override;
 
-    // 因为 Timer 类的成员函数重写当有新的定时器插入到前面时的处理逻辑。
-    void onTimerInsertedAtFront() override;
+    // 重写当有新的定时器插入到前面时的处理逻辑。函数的作用是在定时器被插入到最前面时，触发 tickle 事件，唤醒阻塞的 epoll_wait 回收超时的定时任务（回调 cb 和协程）放入协程调度器中等待调度。
+    void onTimerInsertedAtFront() override { tickle(); }
 
     // 调整 m_fdContexts 数组的大小，并为新的文件描述符 fd 创建并初始化相应的 Fdcontext 对象。
     void contextResize(size_t size);

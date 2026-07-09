@@ -171,17 +171,22 @@ bool IOManager::cancelAll(int fd)
 
 void IOManager::tickle()
 {
+    // 检查当前是否有线程处于空闲状态。如果没有空闲线程，函数直接返回，不执行后续操作。
+    if (!hasIdleThreads()) return;
+
+    // 如果有空闲线程，函数会向管道 m_tickleFds[1] 写入一个字符 "T"。这个写操作的目的是向等待在 m_tickleFds[0]（管道的另一端）的线程发送一个信号，通知它有新任务可以处理了。
+    int res = write(m_tickleFds[1], "T", 1);
+    assert(1 == res);
 }
 
 bool IOManager::stopping()
 {
+    // 重写了 Scheduler 的 stopping()。具体来说，它会检查定时器、挂起事件以及调度器状态，以决定是否可以安全地停止运行。需要注意的是：Scheduler 也有一个 stopping() 函数，但是因为重写的原因实际业务中真正执行的是 IOmanager 的函数，Scheduler 的 stopping() 函数只是对 Scheduler 类需要确保任务数量等于 0，还有是否需要终止的成员变量，活跃线程总和是否为 0 做一个判断。
+    // 没有定时器超时，待处理的事件数量为 0 并且 Scheduler::stopping()。
+    return ~0ull == getNextTimer() && 0 == m_pendingEventCount && Scheduler::stopping();
 }
 
 void IOManager::idle()
-{
-}
-
-void IOManager::onTimerInsertedAtFront()
 {
 }
 
