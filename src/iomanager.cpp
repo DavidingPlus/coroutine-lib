@@ -414,14 +414,15 @@ bool IOManager::stopping()
 
 void IOManager::idle()
 {
+    // TODO
 }
 
 void IOManager::contextResize(size_t size)
 {
-    // 调整m_fdContexts的大小。
+    // 调整 m_fdContexts 的大小。
     m_fdContexts.resize(size);
 
-    //  遍历 m_fdContexts 向量，初始化尚未初始化的 FdContext 对象
+    //  遍历 m_fdContexts 向量，初始化尚未初始化的 FdContext 对象。
     for (size_t i = 0; i < m_fdContexts.size(); ++i)
     {
         if (!m_fdContexts[i])
