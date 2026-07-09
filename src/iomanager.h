@@ -15,11 +15,11 @@ class IOManager : public Scheduler, public TimerManager
 
 public:
 
-    enum Event
+    enum class Event
     {
-        NONE = 0x0, // 表示没有事件。
-        READ = 0x1, // READ == EPOLLIN，表示读事件，对应于 epoll 的 EPOLLIN 事件。
-        WRITE = 0x4 // WRITE == EPOLLOUT，表示写事件，对应于 epoll 的 EPOLLOUT 事件。
+        NONE = 0x0,      // 表示没有事件。
+        READ = 0x1,      // READ == EPOLLIN，表示读事件，对应于 epoll 的 EPOLLIN 事件。
+        WRITE = 0x1 << 2 // WRITE == EPOLLOUT，表示写事件，对应于 epoll 的 EPOLLOUT 事件。
     };
 
 
@@ -47,10 +47,10 @@ private:
         // 根据事件类型获取相应的事件上下文（如读事件上下文或写事件上下文）。
         EventContext &getEventContext(Event event);
 
-        // 重置事件上下文。
+        // 重置 EventContext 事件的上下文，将其恢复到初始或者空的状态。主要作用是清理并重置传入的 Event context 对象，使其不再与任何调度器、线程或回调函数相关联。
         void resetEventContext(EventContext &ctx);
 
-        // 触发事件，根据事件类型调用对应上下文结构的调度器去调度协程或函数。
+        // 触发事件，负责在指定的 IO 事件被触发时，执行相应的回调函数或线程，并且在执行完之后清理相关的事件上下文。
         void triggerEvent(Event event);
 
 
@@ -64,7 +64,7 @@ private:
         int fd = 0;
 
         // 当前注册的事件，可能是 READ、WRITE 或二者的组合。
-        Event events = NONE;
+        Event events = Event::NONE;
 
         std::mutex mutex;
     };
