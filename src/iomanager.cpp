@@ -195,7 +195,7 @@ int IOManager::addEvent(int fd, Event event, std::function<void()> cb)
     // 将事件添加到 epoll 中。如果添加失败，打印错误信息并返回 -1。epoll_ctl() 成功返回 0，失败返回 -1。
     if (epoll_ctl(m_epfd, op, fd, &epevent))
     {
-        std::cerr << "addEvent::epoll_ctl() failed: " << strerror(errno) << std::endl;
+        std::cerr << "addEvent::epoll_ctl() failed: " << strerror(errno) << '\n';
 
 
         return -1;
@@ -231,8 +231,60 @@ int IOManager::addEvent(int fd, Event event, std::function<void()> cb)
     return 0;
 }
 
+// 所有的步骤和上面的 addevent() 添加事件是类似的，可以对比看。
 bool IOManager::delEvent(int fd, Event event)
 {
+    FdContext *fdCtx = nullptr;
+
+    std::shared_lock<std::shared_mutex> readLock(m_mutex);
+    if (fd < static_cast<int>(m_fdContexts.size()))
+    {
+        fdCtx = m_fdContexts[fd];
+
+        readLock.unlock();
+    }
+    else
+    {
+        readLock.unlock();
+
+        // 找不到指定的 fd 也就无法删除，直接返回。
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(fdCtx->mutex);
+
+    // 如果要删除的事件不相同，返回 false，否则就继续。
+    if (!(static_cast<int>(fdCtx->events) & static_cast<int>(event))) return false;
+
+    // 因为这里要删除事件，对原有的事件状态取反就是删除原有的状态。
+    Event newEvents = static_cast<Event>(static_cast<int>(fdCtx->events) & ~static_cast<int>(event));
+    // 删除了这一个事件可能还有其他事件，因此需要判断 newEvents 的状态来决定是修改 EPOLL_CTL_MOD 还是删除 EPOLL_CTL_DEL。
+    int op = static_cast<bool>(newEvents) ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+
+    epoll_event epevent;
+    epevent.events = EPOLLET | static_cast<int>(newEvents);
+    epevent.data.ptr = fdCtx;
+
+    if (epoll_ctl(m_epfd, op, fd, &epevent))
+    {
+        std::cerr << "delEvent::epoll_ctl() failed: " << strerror(errno) << '\n';
+
+
+        return false;
+    }
+
+    // 减少了待处理的事件。
+    --m_pendingEventCount;
+
+    // 更新 fdCtx->events。
+    fdCtx->events = newEvents;
+
+    // 重置上下文。
+    FdContext::EventContext &eventCtx = fdCtx->getEventContext(event);
+    fdCtx->resetEventContext(eventCtx);
+
+
+    return true;
 }
 
 bool IOManager::cancelEvent(int fd, Event event)
