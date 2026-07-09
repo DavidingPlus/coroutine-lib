@@ -78,8 +78,8 @@ public:
 
 public:
 
-    // 允许设置 threads 线程数量，use_caller 是否讲主线程或调度线程包含进行，name 调度器的名字。
-    IOManager(size_t threads = 1, bool use_caller = true, const std::string &name = "IOManager");
+    // 允许设置 threads 线程数量，useCaller 是否讲主线程或调度线程包含进行，name 调度器的名字。
+    IOManager(size_t threads = 1, bool useCaller = true, const std::string &name = "IOManager");
 
     virtual ~IOManager();
 
@@ -112,7 +112,7 @@ protected:
     // 因为 Timer 类的成员函数重写当有新的定时器插入到前面时的处理逻辑。
     void onTimerInsertedAtFront() override;
 
-    // 调整文件描述符上下文数组的大小。
+    // 调整 m_fdContexts 数组的大小，并为新的文件描述符 fd 创建并初始化相应的 Fdcontext 对象。
     void contextResize(size_t size);
 
 
@@ -121,7 +121,8 @@ private:
     // 用于 epoll 的文件描述符。
     int m_epfd = 0;
 
-    // 用于线程间通信的管道文件描述符，fd[0] 是读端，fd[1] 是写端。
+    // 用于进程间通信的管道文件描述符，fd[0] 是读端，fd[1] 是写端。
+    // pipe 通常用于进程间通信，但由于线程共享进程的文件描述符表，因此同一进程内的多个线程也可以通过 pipe 通信。IOManager 使用 pipe 并不是为了传递业务数据，而是创建一个可被 epoll 监听的 fd。当其他线程向调度器添加任务时，通过向 pipe 写入数据触发可读事件，使阻塞在 epoll_wait 中的线程被唤醒。本质是利用 fd 事件机制实现线程间唤醒。
     int m_tickleFds[2];
 
     // 原子计数器，用于记录待处理的事件数量。使用 atomic 的好处是这个变量再进行 + 或 - 都是不会被多线程影响。
