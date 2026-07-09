@@ -16,6 +16,7 @@ set_configdir("$(builddir)/config/")
 add_configfiles("src/config.h.in")
 
 add_includedirs("$(builddir)/config/")
+add_installfiles("$(builddir)/config/config.h", {prefixdir = "include"})
 
 
 option("with_gtest")
