@@ -58,6 +58,9 @@ end
 
 target("coroutine-lib")
     set_kind(build_shared and "shared" or "static")
+
+    apply_current_platform_target_config()
+
     if build_shared and is_current_win32() then
         add_rules("utils.symbols.export_all")
     end
@@ -78,18 +81,17 @@ target("coroutine-lib")
         os.mkdir(target:installdir())
 
         os.cp("$(builddir)/$(plat)/$(arch)/$(mode)/.version", target:installdir())
-        os.cp("$(builddir)/config/config.h", path.join(target:installdir(), "include/config.h"))
+        os.cp("$(builddir)/config/config.h", path.join(target:installdir(), "config/config.h"))
     end)
 
     before_package(function (target)
-        os.tryrm(target:packagedir())
+        os.tryrm(path.join(target:packagedir(), "$(plat)/$(arch)/$(mode)/"))
         os.mkdir(target:packagedir())
 
         os.cp("$(builddir)/$(plat)/$(arch)/$(mode)/.version", target:packagedir())
-        os.cp("$(builddir)/config/config.h", path.join(target:packagedir(), "$(plat)/$(arch)/$(mode)/include/config.h"))
+        os.cp("$(builddir)/$(plat)/$(arch)/$(mode)/.version", path.join(target:packagedir(), "$(plat)/$(arch)/$(mode)/.version"))
+        os.cp("$(builddir)/config/config.h", path.join(target:packagedir(), "$(plat)/$(arch)/$(mode)/config/config.h"))
     end)
-
-    apply_current_platform_target_config()
 target_end()
 
 
