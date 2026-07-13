@@ -1,5 +1,7 @@
 #include "iomanager.h"
 
+#include "config.h"
+
 #include <cassert>
 #include <cstring>
 #include <exception>
@@ -414,7 +416,146 @@ bool IOManager::stopping()
 
 void IOManager::idle()
 {
-    // TODO
+    // 1. 初始化事件存储空间。定义 epoll_wait 单次能处理的最大事件数 MAX_EVENTS（通常设为 256）。利用 std:unique_ptr<epoll_event[]> 在堆上动态分配内存，用于存储就绪事件数组，确保资源在函数退出时能自动释放。
+
+    // 定义了 epoll_wait 能同时处理的最大事件数。
+    static constexpr uint64_t MAX_EVENTS = 256;
+    // 使用 std::unique_ptr 动态分配了一个大小为 MAX_EVENTS 的 epoll_event 数组，用于存储从 epoll_wait 获取的事件。
+    std::unique_ptr<epoll_event[]> events(new epoll_event[MAX_EVENTS]);
+
+    // 2. 进入主循环与阻塞监听。整个逻辑运行在一个 while(true) 循环中。首先检查 stopping() 状态以决定是否退出。随后进入 epoll_wait() 阻塞调用。注意其超时机制：通过 getNextTimer() 获取定时器堆中最近的超时剩余时间，并与系统默认的 MAX_TIMEOUT（如 5000 ms）取最小值，作为 epoll_wait 的超时参数。这保证了定时器能准时触发。
+
+    while (true)
+    {
+        if (COROUTINE_CONFIG_DEBUG) std::cout << "IOManager::idle(), run in thread: " << Thread::GetThreadId() << std::endl;
+
+        if (stopping())
+        {
+            if (COROUTINE_CONFIG_DEBUG) std::cout << "name = " << getName() << " idle exits in thread: " << Thread::GetThreadId() << std::endl;
+
+            break;
+        }
+
+        // 阻塞于 epoll_wait。使用循环是因为有信号中断的情况，需要重试，正常返回代表后续有事件需要处理。
+        int res = 0;
+        while (true)
+        {
+            // 定义了最大超时时间为 5000 毫秒。
+            static constexpr uint64_t MAX_TIMEOUT = 5000;
+            // 获取下一个超时的定时器。
+            uint64_t nextTimeout = getNextTimer();
+            // 获取下一个定时器的超时时间，并将其与 MAX_TIMEOUT 取较小值，避免等待时间过长。
+            nextTimeout = std::min(nextTimeout, MAX_TIMEOUT);
+
+            // epoll_wait 陷入阻塞，等待 tickle 信号的唤醒，并且使用了定时器堆中最早超时的定时器作为 epoll_wait 超时时间。
+            res = epoll_wait(m_epfd, events.get(), MAX_EVENTS, (int)nextTimeout);
+            // res 小于 0 代表失败，如果 errno 是 EINTR（表示信号中断），重试 epoll_wait()。
+            if (res < 0 && EINTR == errno)
+            {
+                continue;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        // 3. 处理超时定时器事件。当 epoll_wait 返回后（无论是超时还是事件触发），首先调用 listExpiredCb(cbs)。该函数会收集所有已到期的定时器回调，并将它们一次性推入调度器的任务队列中，等待后续执行。
+
+        // epoll_wait 返回后检查定时器。无论 epoll 是因为 IO 事件触发、tickle 唤醒还是超时返回，都需要检查 TimerManager 中是否存在已经到期的定时器。
+        std::vector<std::function<void()>> cbs;
+        listExpiredCb(cbs);
+        if (!cbs.empty())
+        {
+            for (const auto &cb : cbs) scheduleLock(cb);
+
+            cbs.clear();
+        }
+
+        // 4. 处理 IO 事件。遍历 epoll_wait 返回的就绪事件数组，首先处理 Tickle 唤醒信号。若发现就绪的是 m_tickleFds[0]（管道读端），说明有其他线程通过 tickle() 唤醒了当前线程。此时通过一个 while 循环将管道中的数据彻底读完（直到返回 -1 且 errno 为 EAGAIN），从而清除唤醒标志。
+
+        // epoll_wait() 返回准备好的事件个数。
+        for (int i = 0; i < res; ++i)
+        {
+            // 获取第 i 个 epoll_event，用于处理该事件。
+            epoll_event &event = events[i];
+
+            // 检查当前事件是否是 tickle 事件（即用于唤醒空闲线程的事件）。
+            if (event.data.fd == m_tickleFds[0])
+            {
+                uint8_t dummy[256];
+                // 清空管道中的所有唤醒数据。由于 epoll 使用 EPOLLET 边缘触发模式，必须读取到管道为空，否则剩余数据不会再次触发 epoll 事件。
+                while (read(m_tickleFds[0], dummy, sizeof(dummy)) > 0)
+                    ;
+
+                // 继续处理其他 IO 事件。
+                continue;
+            }
+
+            // 5. 事件映射与归类。对于其他的 IO 就绪事件，通过 event.data.ptr 获取绑定的文件描述符上下文 fdCtx。由于抽象层只对外暴露 READ 和 WRITE 事件，因此需要对 epoll 的原生事件进行转换：如果发生 EPOLLERR（错误）或 EPOLLHUP（挂起），将其映射为该 fd 已注册的 READ 或 WRITE 事件。这样可以确保即使发生错误，相关的协程也能被唤醒去处理异常（例如执行 read 并发现返回 0 或错误）。
+
+            // 其他事件，通过 event.data.ptr 获取与当前事件关联的 FdContext 指针 fdCtx，该指针包含了与文件描述符相关的上下文信息。
+            FdContext *fdCtx = reinterpret_cast<FdContext *>(event.data.ptr);
+            std::lock_guard<std::mutex> lock(fdCtx->mutex);
+
+            // 如果当前事件是错误或挂起（EPOLLERR 或 EPOLLHUP），则将其转换为可读或可写事件（EPOLLIN 或 EPOLLOUT），以便后续处理。
+            // epoll 在发生错误（EPOLLERR）或者对端关闭连接（EPOLLHUP）时，不一定返回 EPOLLIN/EPOLLOUT，但对于协程调度来说，等待该 fd 的读写操作仍然需要被唤醒，否则对应 Fiber 可能永久阻塞。如果遇到错误/挂起事件，将其转换为用户注册过的读写事件，代表仍需处理它们。只转换 fd 当前关注的事件，避免错误地触发没有注册的读写事件。
+            // 例如：
+            // 1. 如果 Fiber 正在等待 READ，而 socket 被关闭，则转换为 EPOLLIN，让 read 协程被唤醒，并由 read 返回 0 或错误处理关闭情况。
+            // 2. 如果 Fiber 正在等待 WRITE，则转换为 EPOLLOUT。
+            if (event.events & (EPOLLERR | EPOLLHUP)) event.events |= (EPOLLIN | EPOLLOUT) & static_cast<int>(fdCtx->events);
+
+            // 确定实际发生的事件类型（读取、写入或两者都有）。
+            int realEvents = static_cast<int>(Event::NONE);
+            if (event.events & EPOLLIN)
+            {
+                realEvents |= static_cast<int>(Event::READ);
+            }
+            if (event.events & EPOLLOUT)
+            {
+                realEvents |= static_cast<int>(Event::WRITE);
+            }
+            // 检查当前 epoll 返回的实际触发事件 realEvents 是否包含 fdCtx 注册关注的事件。fdCtx->events 保存了用户通过 addEvent 注册的 READ/WRITE 事件，两者进行按位与操作可以判断当前事件是否仍然有效。如果没有交集，说明该事件已经被取消或不再被关注，忽略该事件并继续处理下一个。
+            if (static_cast<int>(Event::NONE) == (static_cast<int>(fdCtx->events) & realEvents))
+            {
+                continue;
+            }
+
+            // 6. 更新状态与触发调度。根据实际发生的 realEvents（读、写或两者组合），计算该 fd 剩余的关注事件 leftEvents。根据是否还有剩余事件，调用 epoll_ctl() 执行 MOD（修改）或 DEL（删除）操作。调用 triggerEvent()：将触发的读/写回调函数或协程推入任务队列。这一步是 IO 任务转为普通调度任务的关键。
+
+            // 计算当前 fd 剩余需要监听的事件。使用按位取反和按位与操作，移除已经触发的事件，保留尚未触发的事件。后续根据 leftEvents 是否为空，决定继续使用 EPOLL_CTL_MOD 修改监听，或使用 EPOLL_CTL_DEL 删除该 fd 的 epoll 事件。
+            int leftEvents = static_cast<int>(fdCtx->events) & ~static_cast<int>(realEvents);
+            int op = leftEvents ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+            // 构造新的 epoll 事件掩码。EPOLLET 表示继续使用边缘触发模式。
+            event.events = leftEvents | EPOLLET;
+
+            // 根据之前计算的操作（op），调用 epoll_ctl 更新或删除 epoll 监听，如果失败，打印错误并继续处理下一个事件。
+            res = epoll_ctl(m_epfd, op, fdCtx->fd, &event);
+            if (res)
+            {
+                std::cerr << "idle::epoll_ctl() failed: " << strerror(errno) << std::endl;
+
+                continue;
+            }
+
+            // 调用 triggerEvent() 触发事件。
+            if (realEvents & static_cast<int>(Event::READ))
+            {
+                fdCtx->triggerEvent(Event::READ);
+                --m_pendingEventCount;
+            }
+            if (realEvents & static_cast<int>(Event::WRITE))
+            {
+                fdCtx->triggerEvent(Event::WRITE);
+                --m_pendingEventCount;
+            }
+        }
+
+        // 7. 协程让出（Yield）。在处理完本次所有的就绪事件后，idle 协程主动调用 yield() 让出 CPU 执行权。此时，调度器会立即切入刚才由定时器或 IO 事件产生的新任务。等到所有任务再次执行完毕，调度器会重新回到 idle 协程开始下一轮监听。
+
+        // 当前线程的协程主动让出控制权，调度器可以选择执行其他任务或再次进入 idle 状态。
+        Fiber::GetThis()->yield();
+    }
 }
 
 void IOManager::contextResize(size_t size)
