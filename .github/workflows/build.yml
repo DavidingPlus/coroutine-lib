@@ -11,7 +11,22 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu
+            arch: x86_64
+            plat: linux
+            xmake-arch: x86_64
+            runs-on: ubuntu-latest
+
+          - os: ubuntu
+            arch: arm64
+            plat: linux
+            xmake-arch: arm64
+            runs-on: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.runs-on }}
 
     steps:
     - uses: actions/checkout@v4
@@ -22,8 +37,7 @@ jobs:
         xmake-version: latest
 
     - name: Configure XMake
-      working-directory: ${{github.workspace}}
-      run: xmake f -m release --with_gtest=yes -y
+      run: xmake f -m release -p ${{ matrix.plat }} -a ${{ matrix.xmake-arch }}
 
     - name: Build Targets
       working-directory: ${{github.workspace}}
@@ -43,7 +57,7 @@ jobs:
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: install
-        path: build/linux/x86_64/release/install
+        name: install-${{ matrix.os }}-${{ matrix.arch }}
+        path: build/${{ matrix.plat }}/${{ matrix.xmake-arch }}/release/install/
         include-hidden-files: true
         if-no-files-found: error

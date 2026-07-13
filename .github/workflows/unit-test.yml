@@ -10,7 +10,22 @@ on:
 
 jobs:
   unit-test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu
+            arch: x86_64
+            plat: linux
+            xmake-arch: x86_64
+            runs-on: ubuntu-latest
+
+          - os: ubuntu
+            arch: arm64
+            plat: linux
+            xmake-arch: arm64
+            runs-on: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.runs-on }}
 
     steps:
     - uses: actions/checkout@v4
@@ -22,7 +37,7 @@ jobs:
 
     - name: Configure XMake
       working-directory: ${{github.workspace}}
-      run: xmake f -m release --with_gtest=yes -y
+      run: xmake f -m release -p ${{ matrix.plat }} -a ${{ matrix.xmake-arch }} --with_gtest=yes -y
 
     - name: Build Targets
       working-directory: ${{github.workspace}}
