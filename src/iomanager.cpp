@@ -216,6 +216,7 @@ int IOManager::addEvent(int fd, Event event, std::function<void()> cb)
     assert(!eventCtx.scheduler && !eventCtx.fiber && !eventCtx.cb);
     // 设置调度器为当前的调度器实例（Scheduler::GetThis()）。FdContext 本身只负责记录 fd 对应的读写事件及其回调信息，并不知道事件触发后应该交给哪个调度器执行。因此在注册事件时，需要记录当前线程正在运行的 Scheduler（通过 Scheduler::GetThis() 获取）。当 epoll_wait() 检测到该事件发生后，triggerEvent() 会通过保存的 scheduler 将对应的协程或回调重新加入调度队列，从而由正确的调度器负责恢复协程或执行回调。
     // 为什么不直接使用 this？因为这里需要保存的是"当前线程实际运行的调度器"这一概念，而不是单纯保存当前 IOManager 对象。对于 IOManager 而言，this 和 Scheduler::GetThis() 在正常情况下通常指向同一个对象（IOManager 继承自 Scheduler），直接使用 this 也能够正常工作。但整个框架统一通过 Scheduler::GetThis() 获取当前线程绑定的调度器，更符合调度器的设计思想，也避免代码依赖具体的对象指针，保持接口风格一致。
+    // eventCtx.scheduler = dynamic_cast<Scheduler *>(this);
     eventCtx.scheduler = Scheduler::GetThis();
 
     // 如果提供了回调函数 cb，则将其保存到 EventContext 中；否则，将当前正在运行的协程保存到 EventContext 中，并确保协程的状态是正在运行。

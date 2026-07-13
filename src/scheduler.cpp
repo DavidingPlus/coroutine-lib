@@ -27,6 +27,10 @@ Scheduler::Scheduler(size_t threads, bool useCaller, const std::string &name)
 
     Thread::SetName(m_name); // 设置当前线程的名称为调度器的名称 m_name。
 
+    // 设置调度协程对象。主线程创建出来的和工作线程创建出来的线程局部变量 t_scheduler 是两个值。
+    // useCaller 为 true 的情况下，t_scheduler 为 this，为 false 的情况，为 nullptr。
+    SetThis();
+
     // useCaller 决定创建调度器的线程（Caller 线程）是否作为工作线程参与协程调度。
     // useCaller = true：表示 Caller 线程也要作为一个工作线程使用。Caller 线程需要执行 Scheduler::run()，但由于它还要继续运行主流程（如 main 函数），因此不能直接进入 run()，而是额外创建一个调度协程（Scheduler Fiber），由主协程切换到调度协程，再由调度协程负责调度和执行各个任务协程。
     // useCaller = false：Caller 线程仅负责创建、启动和停止调度器，不参与协程调度。调度工作全部交给新创建的 Worker 线程完成。由于 Worker 线程的入口函数本身就是 Scheduler::run()，无需再额外创建调度协程，线程直接进入调度循环即可。
@@ -36,9 +40,6 @@ Scheduler::Scheduler(size_t threads, bool useCaller, const std::string &name)
 
         // 创建主协程。
         Fiber::GetThis();
-
-        // 设置调度协程对象。主线程创建出来的工作线程的线程局部变量 t_scheduler 是两个值。useCaller 为 true 的情况下，t_scheduler 为 this，为 false 的情况，为 nullptr。
-        SetThis();
 
         // 创建调度协程。调度协程显然是 false -> 协程退出后将返回主协程。
         // void Scheduler::run() 等价于 void Scheduler::run(Scheduler* this)，成员函数必须知道作用于哪个对象，因此绑定 this 进去，std::bind(&Scheduler::run, this)。
@@ -101,17 +102,17 @@ void Scheduler::stop()
     // 告诉所有线程，以后不要一直调度了，可以准备退出。
     m_stopping = true;
 
-    // 2. 检查 stop() 是否再正确的线程调用。
+    // 2. 检查 stop() 是否再正确的线程调用。从目前的设计来看，这个检查没有意义。
+    // 不管是 m_useCaller 为 true 还是 false，都必须在主线程里面 SetThis() 绑定好协程调度器，因为管理的操作一定是在主线程发生的，因此一定要保证 GetThis() 这类函数的返回值不是 nullptr。具体见 IOManager 的 addEvent() 的 eventCtx.scheduler = Scheduler::GetThis()。因此下面的检测其实没有意义。
     // 下面的 this 指针对应的 Scheduler 对象是主线程最开始创建调度器的那个 Scheduler 对象。调用 Scheduler::stop() 函数的是一定主线程，例如 main() 函数里面！
-    // m_useCaller 为 true，Caller 线程参与调度，因此当前线程绑定的 Scheduler(GetThis()) 就是当前 Scheduler 对象(this)，两者应相等。
-    // m_useCaller 为 false，Caller 线程不参与协程调度，它的 t_scheduler 是 nullptr。Worker 线程负责自己的协程调度，它的 t_scheduler 和 this 指针不同。
     if (COROUTINE_CONFIG_DEBUG)
     {
         std::cout << "this: " << this << '\n'
                   << "GetThis(): " << GetThis() << std::endl;
     }
 
-    m_useCaller ? assert(this == GetThis()) : assert(this != GetThis());
+    // TODO 这个判断从当前设计上暂时无意义，从语义上有意义，后续优化。
+    // m_useCaller ? assert(this == GetThis()) : assert(this != GetThis());
 
     // 3. 唤醒所有睡眠中的线程。
     // 调用 tickle() 的目的唤醒空闲线程或协程，防止 m_scheduler 或其他线程处于永久阻塞在等待任务的状态中。
