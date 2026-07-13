@@ -1,11 +1,18 @@
 # Release On Multiple Platform
 name: Release
 
+env:
+  PACKAGE_NAME: coroutine-lib
+
 on:
   workflow_dispatch:
   push:
     tags:
       - "v*"
+
+permissions:
+  contents: write
+  actions: write
 
 jobs:
   build:
@@ -87,20 +94,22 @@ jobs:
             suffix="-${{ matrix.runtime }}"
         fi
 
-        echo "archive-name=coroutine-lib-${{ github.ref_name }}-${{ matrix.plat }}-${{ matrix.xmake-arch }}${suffix}.tar.gz" >> $GITHUB_ENV
+        echo "ARCHIVE_NAME=${{ env.PACKAGE_NAME }}-${{ github.ref_name }}-${{ matrix.plat }}-${{ matrix.xmake-arch }}${suffix}.tar.gz" >> $GITHUB_ENV
 
     - name: Archive Platform Packages
       working-directory: ${{github.workspace}}
       shell: bash
       run: |
+        group=$(echo "${{ env.PACKAGE_NAME }}" | cut -c1)
+
         tar czf \
-        ${{ env.archive-name }} \
-        -C build/packages/c/coroutine-lib/${{ matrix.plat }}/${{ matrix.xmake-arch }}/release .
+        ${{ env.ARCHIVE_NAME }} \
+        -C build/packages/${group}/${{ env.PACKAGE_NAME }}/${{ matrix.plat }}/${{ matrix.xmake-arch }}/release .
 
     - name: Upload Platform Packages
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.archive-name }}
+        name: ${{ env.ARCHIVE_NAME }}
         path: "*.tar.gz"
         include-hidden-files: true
         if-no-files-found: error
@@ -126,3 +135,14 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: assets/*.tar.gz
+
+    - name: Trigger Update XMake Repo Workflow
+      uses: benc-uk/workflow-dispatch@v1
+      with:
+        workflow: update-xmake-repo.yml
+        token: ${{ secrets.XMAKE_REPO_TOKEN }}
+        inputs: |
+          {
+            "package_name": "${{ env.PACKAGE_NAME }}",
+            "version": "${{ github.ref_name }}"
+          }
