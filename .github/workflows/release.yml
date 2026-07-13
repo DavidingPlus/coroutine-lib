@@ -1,0 +1,128 @@
+# Release On Multiple Platform
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          # Windows MD
+          - os: windows
+            arch: x86_64
+            plat: windows
+            xmake-arch: x64
+            runtime: MD
+            runs-on: windows-latest
+
+          # Windows MDd
+          - os: windows
+            arch: x86_64
+            plat: windows
+            xmake-arch: x64
+            runtime: MDd
+            runs-on: windows-latest
+
+          # Linux x86_64
+          - os: ubuntu
+            arch: x86_64
+            plat: linux
+            xmake-arch: x86_64
+            runtime: ""
+            runs-on: ubuntu-latest
+
+          # Linux arm64
+          - os: ubuntu
+            arch: arm64
+            plat: linux
+            xmake-arch: arm64
+            runtime: ""
+            runs-on: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.runs-on }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup XMake
+      uses: xmake-io/github-action-setup-xmake@v1
+      with:
+        xmake-version: latest
+
+    - name: Configure XMake
+      working-directory: ${{github.workspace}}
+      shell: bash
+      run: |
+        args="\
+          -m release \
+          -p ${{ matrix.plat }} \
+          -a ${{ matrix.xmake-arch }}"
+
+        if [ -n "${{ matrix.runtime }}" ]; then
+            args="$args --runtimes=${{ matrix.runtime }}"
+        fi
+
+        xmake f $args -y
+
+    - name: Build Targets
+      working-directory: ${{github.workspace}}
+      run: xmake build
+
+    - name: Generate Packages
+      working-directory: ${{github.workspace}}
+      run: xmake package
+
+    - name: Generate Archive Name
+      working-directory: ${{github.workspace}}
+      shell: bash
+      run: |
+        suffix=""
+
+        if [ -n "${{ matrix.runtime }}" ]; then
+            suffix="-${{ matrix.runtime }}"
+        fi
+
+        echo "archive-name=coroutine-lib-${{ github.ref_name }}-${{ matrix.plat }}-${{ matrix.xmake-arch }}${suffix}.tar.gz" >> $GITHUB_ENV
+
+    - name: Archive Platform Packages
+      working-directory: ${{github.workspace}}
+      shell: bash
+      run: |
+        tar czf \
+        ${{ env.archive-name }} \
+        -C build/packages/c/coroutine-lib/${{ matrix.plat }}/${{ matrix.xmake-arch }}/release .
+
+    - name: Upload Platform Packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.archive-name }}
+        path: "*.tar.gz"
+        include-hidden-files: true
+        if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download Packages
+      uses: actions/download-artifact@v4
+      with:
+        path: assets
+        merge-multiple: true
+
+    - name: Display Release Assets
+      run: tree assets -a
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: assets/*.tar.gz
