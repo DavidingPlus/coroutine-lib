@@ -6,6 +6,7 @@
 #include "config.h"
 
 #include <iostream>
+#include <cstring>
 
 #include <dlfcn.h>
 
@@ -399,6 +400,24 @@ extern "C"
         return 0;
     }
 
+    int socket(int domain, int type, int protocol)
+    {
+        if (!tHookEnable) return socket_f(domain, type, protocol);
+
+        // 如果钩子启用了，则通过调用原始的 socket 函数创建套接字，并将返回的文件描述符存储在 fd 变量中。
+        int fd = socket_f(domain, type, protocol);
+        if (-1 == fd) // fd是无效的情况
+        {
+            std::cerr << "socket() failed:" << strerror(errno) << '\n';
+            return fd;
+        }
+
+        // 如果 socket 创建成功，使用 get() 函数将其加入 FdManager 的文件描述符管理类来进行管理。具体判断是否在其管理的文件描述符中，如果不在扩展存储文件描述数组大小，并且利用 FdCtx 进行初始化判断是是不是套接字，是不是系统非阻塞模式。
+        FdMgr::GetInstance()->get(fd, true);
+
+
+        return fd;
+    }
 
     ssize_t read(int fd, void *buf, size_t count)
     {

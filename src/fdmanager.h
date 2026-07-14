@@ -83,6 +83,8 @@ public:
     // 构造函数。
     FdManager() { m_datas.resize(64); }
 
+    virtual ~FdManager() = default;
+
     // 获取指定文件描述符的 FdCtx 对象。如果 autoCreate 为 true，在不存在时自动创建新的 FdCtx 对象。
     std::shared_ptr<FdCtx> get(int fd, bool autoCreate = false);
 
