@@ -1,5 +1,12 @@
 #include "hook.h"
 
+#include "fdmanager.h"
+#include "iomanager.h"
+
+#include "config.h"
+
+#include <iostream>
+
 #include <dlfcn.h>
 
 
@@ -103,5 +110,210 @@ static HookIniter sHookIniter;
 // 用于跟踪定时器的状态。它有一个 cancelled 成员变量，通常用于表示定时器是否已经被取消。
 struct TimerInfo
 {
+    // 表示定时器是否已经被取消。
     int cancelled = 0;
 };
+
+
+/**
+ * @brief 将阻塞式 IO 操作转换为协程异步 IO。
+ *
+ * doIo() 是对阻塞式 IO 操作 read/write/recv/send/connect 等可能阻塞的系统调用的统一封装。它根据当前文件描述符状态决定是否直接调用原始系统调用，或者将可能阻塞的 IO 操作转换为协程异步等待。当 IO 暂时无法完成时，doIo 会将当前协程挂起，并通过 IOManager 等待对应事件发生；如果设置了超时时间，则结合定时器机制处理超时情况。最终，doIo 将传统阻塞 IO 转换为基于事件驱动的协程 IO，避免阻塞线程，提高并发处理能力。
+ *
+ * 整体执行流程：
+ *
+ *  1. 调用原始系统 IO 函数（libc 函数）
+ *
+ *                    +----------------+
+ *                    | fun(fd, args)  |
+ *                    +----------------+
+ *                            |
+ *                            v
+ *                  +-------------------+
+ *                  | 返回值 >= 0 ?     |
+ *                  +-------------------+
+ *                     |             |
+ *                    是             否
+ *                     |             |
+ *                     v             v
+ *              返回 IO 结果     errno == EINTR ?
+ *                                   |
+ *                         +---------+---------+
+ *                         |                   |
+ *                        是                   否
+ *                         |                   |
+ *                         v                   v
+ *                      retry           errno == EAGAIN ?
+ *                                             |
+ *                                  +----------+----------+
+ *                                  |                     |
+ *                                 否                     是
+ *                                  |                     |
+ *                                  v                     v
+ *                             返回错误          当前 IO 暂不可用
+ *
+ *
+ *  2. EAGAIN 处理流程：
+ *
+ *             errno == EAGAIN
+ *                    |
+ *                    v
+ *        +-------------------------+
+ *        | 获取 IOManager          |
+ *        +-------------------------+
+ *                    |
+ *                    v
+ *        是否设置 IO 超时时间？
+ *                    |
+ *          +---------+---------+
+ *          |                   |
+ *         是                   否
+ *          |                   |
+ *          v                   |
+ *     添加条件定时器              |
+ *          |                   |
+ *          +---------+---------+
+ *                    |
+ *                    v
+ *        IOManager::addEvent(fd,event)
+ *                    |
+ *          +---------+---------+
+ *          |                   |
+ *         失败                 成功
+ *          |                   |
+ *          v                   v
+ *     取消 timer          当前 Fiber yield()
+ *     返回错误                   |
+ *                              |
+ *                              v
+ *                 +------------+------------+
+ *                 |                         |
+ *             IO事件触发                 Timer超时
+ *                 |                         |
+ *                 v                         v
+ *          IOManager恢复Fiber        timer callback
+ *                 |                         |
+ *                 |                  设置 ETIMEDOUT
+ *                 |                  cancelEvent()
+ *                 |                         |
+ *                 +------------+------------+
+ *                              |
+ *                              v
+ *                    Fiber 从 yield 恢复
+ *                              |
+ *                              v
+ *                       取消超时 timer
+ *                              |
+ *                 +------------+------------+
+ *                 |                         |
+ *             超时结束                  IO事件完成
+ *                 |                         |
+ *                 v                         v
+ *          errno=ETIMEDOUT              goto retry
+ *          return -1                       |
+ *                                           v
+ *                                重新调用 fun(fd,args...)
+ *
+ */
+/**
+ * @param fd 需要进行 IO 操作的文件描述符。
+ * @param fun 原始系统调用函数指针，例如 read_f、write_f，用于在满足条件时调用真实 libc 函数。
+ * @param hookFunName 当前 hook 函数名称，仅用于调试输出和错误定位。
+ * @param event 需要监听的 IO 事件类型，例如 IOManager::READ 或 IOManager::WRITE。当 IO 暂时不可用时，IOManager 根据该事件等待 fd 状态变化。
+ * @param timeoutSo 超时选项对应的 socket 参数，例如 SO_RCVTIMEO 或 SO_SNDTIMEO，用于从 FdCtx 中获取对应 IO 超时时间。
+ * @param args 传递给原始系统调用的参数。使用完美转发保持参数原始类型，支持不同 IO 函数的参数形式。
+ */
+template <typename OriginFun, typename... Args>
+static ssize_t doIo(int fd, OriginFun fun, const char *hookFunName, uint32_t event, int timeoutSo, Args &&...args)
+{
+    // 如果全局钩子功能未启用，则直接调用原始的 I/O 函数。
+    if (tHookEnable) return fun(fd, std::forward<Args>(args)...);
+
+    // 获取与文件描述符 fd 相关联的上下文 ctx。
+    std::shared_ptr<FdCtx> ctx = FdMgr::GetInstance()->get(fd);
+    // 如果上下文不存在，则直接调用原始的 I/O 函数。
+    if (!ctx) return fun(fd, std::forward<Args>(args)...);
+    // 如果文件描述符已经关闭，设置 errno 为 EBADF 并返回 -1。
+    if (ctx->isClosed())
+    {
+        // Bad file number，表示文件描述符无效或已经关闭。
+        errno = EBADF;
+        return -1;
+    }
+    // 如果文件描述符不是一个 socket 或者用户设置了非阻塞模式，则直接调用原始的 I/O 操作函数。
+    if (!ctx->isSocket() || ctx->getUserNonblock()) return fun(fd, std::forward<Args>(args)...);
+
+    // 获取超时设置并初始化 TimerInfo 结构体，用于后续的超时管理和取消操作。
+    uint64_t timeout = ctx->getTimeout(timeoutSo);
+    std::shared_ptr<TimerInfo> tinfo(new TimerInfo);
+
+retry:
+    // 执行原始 I/O 函数。如果正确执行，则会按照原始 I/O 函数正常返回退出函数。doIo() hook 的是 I/O 操作失败时需要额外做的事情。
+    ssize_t n = fun(fd, std::forward<Args>(args)...);
+
+    // 如果 I/O 系统调用失败，并且失败原因是被信号打断（EINTR），那么重新执行一次系统调用，直到不是因为 EINTR 的原因返回。
+    while (-1 == n && EINTR == errno) n = fun(fd, std::forward<Args>(args)...);
+
+    // 如果 I/O 操作因为资源暂时不可用（EAGAIN）而失败，函数会添加一个事件监听器来等待资源可用。同时，如果有超时设置，还会启动一个条件计时器来取消事件。
+    if (-1 == n && EAGAIN == errno)
+    {
+        IOManager *iom = IOManager::GetThis();
+        std::shared_ptr<Timer> timer;
+        std::weak_ptr<TimerInfo> winfo(tinfo);
+
+        // 1. 如果执行的 read 等函数在 FdManager 管理的 FdCtx 中 fd 设置了超时时间，就会走到这里。添加 addconditionTimer() 事件。
+        if (static_cast<uint64_t>(-1) != timeout) // 超时时间默认是 -1。
+        {
+            timer = iom->addConditionTimer(
+                timeout,
+                [winfo, fd, iom, event]()
+                {
+                    auto t = winfo.lock();
+                    // 如果 TimerInfo 对象已被释放（!t），或者操作已被取消（t->cancelled 非 0），则直接返回。
+                    if (!t || t->cancelled) return;
+
+                    // 超时时间到达，记录这次 IO 等待结束的原因是“超时”。
+                    t->cancelled = ETIMEDOUT;
+                    // 取消该文件描述符上的事件，并立即触发一次事件。
+                    iom->cancelEvent(fd, static_cast<IOManager::Event>(event));
+                },
+                winfo);
+        }
+
+        // 2. 将 fd（文件描述符）和 event（要监听的事件，如读或写事件）添加到 IOManager 中进行管理。IOManager 会监听这个文件描述符上的事件，当事件触发时，它会调度相应的协程来处理这个事件。
+        int res = iom->addEvent(fd, static_cast<IOManager::Event>(event));
+        // 如果 res 为 -1，说明 addEvent 失败。取消之前设置的定时器，避免误触发。
+        if (-1 == res)
+        {
+            if (COROUTINE_CONFIG_DEBUG) std::cout << hookFunName << " addEvent(" << fd << ", " << event << ") failed";
+
+            if (timer) timer->cancel();
+
+
+            return -1;
+        }
+        // 如果 addEvent 成功（res 为 0），当前协程会调用 yield() 函数，将自己挂起，等待事件的触发。
+        else
+        {
+            Fiber::GetThis()->yield();
+
+            // 3. 当协程被恢复时（例如，事件触发后），它会继续执行 yield() 之后的代码。如果之前设置了定时器（timer 不为 nullptr），则需取消该定时器。因为当前 Fiber 已经因为 I/O 事件或超时事件恢复执行，说明本次 I/O 等待已经结束。如果之前创建了超时定时器，需要将其取消，避免 I/O 已经完成后定时器仍然触发，干扰后续的 I/O 操作或重复处理事件。
+            if (timer) timer->cancel();
+
+            // 检查当前 Fiber 是否因为 I/O 超时而被唤醒。如果前面设置的条件定时器触发，会将 tinfo->cancelled 标记为 ETIMEDOUT，并通过 cancelEvent() 唤醒 Fiber，已经执行过 I/O 事件了，此时直接返回超时错误，不再重新尝试 I/O。
+            if (ETIMEDOUT == tinfo->cancelled)
+            {
+                errno = tinfo->cancelled;
+                return -1;
+            }
+            // 如果没有超时，则 retry 正常执行原始 I/O 函数，然后退出函数。
+            else
+            {
+                goto retry;
+            }
+        }
+    }
+
+
+    return n;
+}
