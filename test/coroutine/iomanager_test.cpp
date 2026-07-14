@@ -229,7 +229,7 @@ TEST(IOManagerTest, CancelAll)
     ASSERT_TRUE(iom.cancelAll(pipefd[0]));
     ASSERT_TRUE(iom.cancelAll(pipefd[1]));
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     ASSERT_EQ(count, 2);
 

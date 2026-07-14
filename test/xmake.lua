@@ -10,7 +10,7 @@ target("tests")
 
     set_kind("binary")
     set_targetdir("$(builddir)/$(plat)/$(arch)/$(mode)/test")
-    add_deps("coroutine-lib")
+    add_deps("coroutine")
     add_packages("gtest")
 
     on_install(function () end)
@@ -23,8 +23,8 @@ target("tests")
         files = {"testrun/*.cpp"}
     })
 
-    add_tests("coroutine-lib", {
+    add_tests("coroutine", {
         realtime_output = true,
-        files = {"coroutine-lib/*.cpp"}
+        files = {"coroutine/*.cpp"}
     })
 target_end()
