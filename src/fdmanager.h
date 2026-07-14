@@ -6,6 +6,8 @@
 #include <shared_mutex>
 #include <mutex>
 
+#include <sys/socket.h>
+
 
 // FdCtx 类主要用于管理与文件描述符相关的状态和操作。在用户态记录了 fd 的读写超时和非阻塞信息，其中非阻塞包括用户显示设置的非阻塞和 hook 内部设置的非阻塞，区分这两种非阻塞可以有效应对用户对 fd 设置/获取 NONBLOCK 模式的情形。
 class FdCtx : public std::enable_shared_from_this<FdCtx>
@@ -13,9 +15,9 @@ class FdCtx : public std::enable_shared_from_this<FdCtx>
 
 public:
 
-    FdCtx(int fd);
+    FdCtx(int fd) : m_fd(fd) { init(); }
 
-    ~FdCtx();
+    ~FdCtx() = default;
 
     // 初始化 FdCtx 对象。
     bool init();
@@ -36,10 +38,11 @@ public:
 
     bool getSysNonblock() const { return m_sysNonblock; }
 
-    // 设置和获取超时时间，type 用于区分读事件和写事件的超时设置，v 表示时间毫秒。
+    // 设置超时时间，type 用于区分读事件和写事件的超时设置，v 表示时间毫秒。
     void setTimeout(int type, uint64_t v);
 
-    uint64_t getTimeout(int type);
+    // 获取超时时间。
+    uint64_t getTimeout(int type) { return SO_SNDTIMEO == type ? m_sendTimeout : m_recvTimeout; }
 
 
 private:
@@ -50,10 +53,10 @@ private:
     // 标记文件描述符是否是一个套接字。
     bool m_isSocket = false;
 
-    // 标记文件描述符是否设置为系统非阻塞模式。
+    // 标记是否由框架（Hook）将 fd 设置为非阻塞模式。为了实现协程调度，所有 Socket 都需要工作在非阻塞模式下，该状态仅供框架内部使用，不代表用户主动设置了 O_NONBLOCK。
     bool m_sysNonblock = false;
 
-    // 标记文件描述符是否设置为用户非阻塞模式。
+    // 标记是否由用户主动将 fd 设置为非阻塞模式。该状态用于保存用户的真实意图，Hook 在处理 fcntl/ioctl 等系统调用时需要依据该状态，保证对用户表现出的行为与 Linux 原生接口保持一致。
     bool m_userNonblock = false;
 
     // 标记文件描述符是否已关闭。
