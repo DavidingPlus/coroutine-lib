@@ -429,26 +429,6 @@ extern "C"
         return fd;
     }
 
-    int close(int fd)
-    {
-        if (!tHookEnable) return close_f(fd);
-        // 获得 FdManager 管理的 FdCtx 对象。
-        std::shared_ptr<FdCtx> ctx = FdMgr::GetInstance()->get(fd);
-
-        if (ctx)
-        {
-            // 删除 fd 以前，取消文件描述符 fd 上的所有事件，并触发所有回调函数。
-            auto iom = IOManager::GetThis();
-            if (iom) iom->cancelAll(fd);
-
-            FdMgr::GetInstance()->del(fd);
-        }
-
-
-        // 处理完后调用原始系统调用，完成系统原生 fd 的删除。del() 函数不包含这部分的操作。
-        return close_f(fd);
-    }
-
     ssize_t read(int fd, void *buf, size_t count)
     {
         return doIo(fd, read_f, "read", static_cast<uint32_t>(IOManager::Event::READ), SO_RCVTIMEO, buf, count);
@@ -497,5 +477,61 @@ extern "C"
     ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags)
     {
         return doIo(sockfd, sendmsg_f, "sendmsg", static_cast<uint32_t>(IOManager::Event::WRITE), SO_SNDTIMEO, msg, flags);
+    }
+
+    int close(int fd)
+    {
+        if (!tHookEnable) return close_f(fd);
+        // 获得 FdManager 管理的 FdCtx 对象。
+        std::shared_ptr<FdCtx> ctx = FdMgr::GetInstance()->get(fd);
+
+        if (ctx)
+        {
+            // 删除 fd 以前，取消文件描述符 fd 上的所有事件，并触发所有回调函数。
+            auto iom = IOManager::GetThis();
+            if (iom) iom->cancelAll(fd);
+
+            FdMgr::GetInstance()->del(fd);
+        }
+
+
+        // 处理完后调用原始系统调用，完成系统原生 fd 的删除。del() 函数不包含这部分的操作。
+        return close_f(fd);
+    }
+
+    // 一个用于获取套接字选项值的函数。它允许你检查指定套接字的某些选项的当前设置。
+    int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen)
+    {
+        return getsockopt_f(sockfd, level, optname, optval, optlen);
+    }
+
+    // 用于设置套接字的选项。它允许你对套接字的行为进行配置，如设置超时时间、缓冲区大小、地址重用等。
+    int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen)
+    {
+        if (!tHookEnable) return setsockopt_f(sockfd, level, optname, optval, optlen);
+
+        // 如果 level 是 SOL_SOCKET 且 optname 是 SO_RCVTIMEO（接收超时）或 SO_SNDTIMEO（发送超时），获取与该文件描述符关联的 FdCtx 上下文对象，并设置超时时间。
+        if (SOL_SOCKET == level)
+        {
+            if (SO_RCVTIMEO == optname || SO_SNDTIMEO == optname)
+            {
+                std::shared_ptr<FdCtx> ctx = FdMgr::GetInstance()->get(sockfd);
+                if (ctx)
+                {
+                    // 那么代码会读取传入的 timeval 结构体，将其转化为毫秒数，并调用 ctx->setTimeout 方法，记录超时设置。
+                    // struct timeval
+                    // {
+                    //     long tv_sec;  // 秒。
+                    //     long tv_usec; // 微秒。
+                    // };
+                    const timeval *v = (const timeval *)optval;
+                    ctx->setTimeout(optname, v->tv_sec * 1000 + v->tv_usec / 1000);
+                }
+            }
+        }
+
+
+        // 无论是否执行了超时处理，最后都会调用原始的 setsockopt_f 函数来设置实际的套接字选项。
+        return setsockopt_f(sockfd, level, optname, optval, optlen);
     }
 }
