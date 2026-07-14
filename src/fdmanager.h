@@ -15,6 +15,7 @@ class FdCtx : public std::enable_shared_from_this<FdCtx>
 
 public:
 
+    // 构造 FdCtx 对象。参数 fd 必须是一个已经存在且有效的 Linux 文件描述符。FdCtx 不负责创建文件描述符，而是对已有 fd 进行状态管理，包括检测 fd 类型、记录非阻塞状态以及维护超时信息。如果传入无效 fd，则初始化失败，isInit() 将返回 false。
     FdCtx(int fd) : m_fd(fd) { init(); }
 
     ~FdCtx() = default;
