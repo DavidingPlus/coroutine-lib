@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include <shared_mutex>
+#include <mutex>
 
 
 // FdCtx 类主要用于管理与文件描述符相关的状态和操作。在用户态记录了 fd 的读写超时和非阻塞信息，其中非阻塞包括用户显示设置的非阻塞和 hook 内部设置的非阻塞，区分这两种非阻塞可以有效应对用户对 fd 设置/获取 NONBLOCK 模式的情形。
@@ -106,9 +107,9 @@ public:
     {
         // 加锁。
         std::lock_guard<std::mutex> lock(mutex);
-        if (!instace)
+        if (!instance)
         {
-            instace = new T();
+            instance = new T();
         }
 
 
@@ -116,32 +117,32 @@ public:
         return instance;
     }
 
-    static void DestroyInstace()
+    static void DestroyInstance()
     {
         std::lock_guard<std::mutex> lock(mutex);
-        if (instace)
+        if (instance)
         {
-            delete instace;
-            instace = nullptr; // 防止野指针。
+            delete instance;
+            instance = nullptr; // 防止野指针。
         }
     }
 
     Singleton(const Singleton &) = delete;
 
-    Singleton &operater = (const Singleton &) = delete;
+    Singleton &operator=(const Singleton &) = delete;
 
 
 protected:
 
-    Singleton();
+    Singleton() = default;
 
-    ~Singleton();
+    virtual ~Singleton() = default;
 
 
 private:
 
     // 对外提供的实例。
-    static T *instace;
+    static T *instance;
 
     // 互斥锁。
     static std::mutex mutex;
