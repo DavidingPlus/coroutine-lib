@@ -419,6 +419,20 @@ extern "C"
         return fd;
     }
 
+    // TODO
+    int connectWithTimeout(int fd, const struct sockaddr *addr, socklen_t addrlen, uint64_t timeout_ms)
+    {
+    }
+
+
+    static uint64_t sConnectTimeout = -1;
+
+
+    int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
+    {
+        return connectWithTimeout(sockfd, addr, addrlen, sConnectTimeout);
+    }
+
     int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
     {
         int fd = doIo(sockfd, accept_f, "accept", static_cast<uint32_t>(IOManager::Event::READ), SO_RCVTIMEO, addr, addrlen);
@@ -497,6 +511,15 @@ extern "C"
 
         // 处理完后调用原始系统调用，完成系统原生 fd 的删除。del() 函数不包含这部分的操作。
         return close_f(fd);
+    }
+
+    // TODO
+    int fcntl(int fd, int cmd, ... /* arg */)
+    {
+    }
+
+    int ioctl(int fd, unsigned long request, ...)
+    {
     }
 
     // 一个用于获取套接字选项值的函数。它允许你检查指定套接字的某些选项的当前设置。
