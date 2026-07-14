@@ -92,7 +92,11 @@ void hookInit()
 // - #name：将函数名转换为字符串，例如 sleep -> "sleep"。
 //
 // 最终 HOOK_FUN(XX) 会展开成所有 hook 函数的 dlsym 初始化代码，避免为每个函数重复手写初始化逻辑。
-#define XX(name) name##_f = (name##_fun)dlsym(RTLD_NEXT, #name);
+#define XX(name)                                    \
+    name##_f = (name##_fun)dlsym(RTLD_NEXT, #name); \
+    if (COROUTINE_CONFIG_DEBUG)                     \
+        std::cout << #name << ": " << (void *)name##_f << std::endl;
+
     HOOK_FUN(XX)
 #undef XX
 }
@@ -228,7 +232,7 @@ template <typename OriginFun, typename... Args>
 static ssize_t doIo(int fd, OriginFun fun, const char *hookFunName, uint32_t event, int timeoutSo, Args &&...args)
 {
     // 如果全局钩子功能未启用，则直接调用原始的 I/O 函数。
-    if (tHookEnable) return fun(fd, std::forward<Args>(args)...);
+    if (!tHookEnable) return fun(fd, std::forward<Args>(args)...);
 
     // 获取与文件描述符 fd 相关联的上下文 ctx。
     std::shared_ptr<FdCtx> ctx = FdMgr::GetInstance()->get(fd);
@@ -420,18 +424,18 @@ extern "C"
     }
 
     // TODO
-    int connectWithTimeout(int fd, const struct sockaddr *addr, socklen_t addrlen, uint64_t timeout_ms)
-    {
-    }
+    // int connectWithTimeout(int fd, const struct sockaddr *addr, socklen_t addrlen, uint64_t timeout_ms)
+    // {
+    // }
 
 
-    static uint64_t sConnectTimeout = -1;
+    // static uint64_t sConnectTimeout = -1;
 
 
-    int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
-    {
-        return connectWithTimeout(sockfd, addr, addrlen, sConnectTimeout);
-    }
+    // int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
+    // {
+    //     return connectWithTimeout(sockfd, addr, addrlen, sConnectTimeout);
+    // }
 
     int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
     {
@@ -514,13 +518,13 @@ extern "C"
     }
 
     // TODO
-    int fcntl(int fd, int cmd, ... /* arg */)
-    {
-    }
+    // int fcntl(int fd, int cmd, ... /* arg */)
+    // {
+    // }
 
-    int ioctl(int fd, unsigned long request, ...)
-    {
-    }
+    // int ioctl(int fd, unsigned long request, ...)
+    // {
+    // }
 
     // 一个用于获取套接字选项值的函数。它允许你检查指定套接字的某些选项的当前设置。
     int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen)
