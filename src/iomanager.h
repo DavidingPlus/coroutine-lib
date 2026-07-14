@@ -79,7 +79,8 @@ public:
 public:
 
     // 允许设置 threads 线程数量，useCaller 是否讲主线程或调度线程包含进行，name 调度器的名字。
-    // TODO 默认参数不使用 (1, true)，因为主线程参与工作调度的情况下，目前的设计需要 IOManager 析构时调用 stop() 才会调度主线程，因此任务完全不会被调度，肯定失败。
+    // TODO 注意：默认不使用 (1, true)。当前实现中，useCaller == true 时，主线程不会在构造函数中立即进入调度循环，而是在 stop() 中切换到调度协程执行 Scheduler::run()。这是因为构造函数返回后，调用者通常还需要继续执行后续初始化代码，不能直接将主线程切换到调度协程。因此，当 threads == 1 && useCaller == true 时，系统中没有任何后台调度线程，而主线程又尚未进入调度循环，导致 schedule() 或 addEvent() 添加的任务无法被执行。如果仅依赖析构函数调用 stop()，则所有任务都会推迟到对象销毁阶段才开始执行，无法满足正常的 IO 调度需求，因此当前实现默认不采用 (1, true)。
+    // 这个设计和 Scheduler 里面的那个是对应的，都是同一个问题。
     IOManager(size_t threads = 1, bool useCaller = false, const std::string &name = "IOManager");
 
     virtual ~IOManager();
