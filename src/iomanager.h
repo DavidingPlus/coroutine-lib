@@ -79,7 +79,8 @@ public:
 public:
 
     // 允许设置 threads 线程数量，useCaller 是否讲主线程或调度线程包含进行，name 调度器的名字。
-    IOManager(size_t threads = 1, bool useCaller = true, const std::string &name = "IOManager");
+    // TODO 默认参数不使用 (1, true)，因为主线程参与工作调度的情况下，目前的设计需要 IOManager 析构时调用 stop() 才会调度主线程，因此任务完全不会被调度，肯定失败。
+    IOManager(size_t threads = 1, bool useCaller = false, const std::string &name = "IOManager");
 
     virtual ~IOManager();
 

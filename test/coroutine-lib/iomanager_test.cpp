@@ -10,8 +10,8 @@
 TEST(IOManagerTest, ReadEvent)
 {
     IOManager iom(2, true); // 成功。
-    // IOManager iom(2, false); // 成功
-    // IOManager iom(1, true);  // 失败。这个是因为主线程参与工作调度的情况下，目前的设计需要 IOManager 析构时调用 stop() 才会调度主线程，因此肯定是失败的。
+    // IOManager iom(2, false); // 成功。
+    // IOManager iom(1, true);  // 默认的参数。失败。因为主线程参与工作调度的情况下，目前设计需要 IOManager 析构时调用 stop() 才会调度主线程，因此肯定是失败的。
 
     int pipefd[2];
     ASSERT_EQ(pipe(pipefd), 0);
@@ -116,28 +116,34 @@ TEST(IOManagerTest, ReadWriteEvent)
     close(pipefd[1]);
 }
 
-// TEST(IOManagerTest, DuplicateAddEvent)
-// {
-//     IOManager iom;
+TEST(IOManagerTest, DuplicateAddEvent)
+{
+    IOManager iom(2, false);
 
-//     int pipefd[2];
-//     pipe(pipefd);
+    int pipefd[2];
+    ASSERT_EQ(pipe(pipefd), 0);
 
-//     ASSERT_EQ(
-//         iom.addEvent(
-//             pipefd[0],
-//             IOManager::Event::READ),
-//         0);
+    ASSERT_EQ(
+        iom.addEvent(
+            pipefd[0],
+            IOManager::Event::READ),
+        0);
 
-//     ASSERT_EQ(
-//         iom.addEvent(
-//             pipefd[0],
-//             IOManager::Event::READ),
-//         -1);
+    ASSERT_EQ(
+        iom.addEvent(
+            pipefd[0],
+            IOManager::Event::READ),
+        -1);
 
-//     close(pipefd[0]);
-//     close(pipefd[1]);
-// }
+    ASSERT_EQ(
+        iom.delEvent(
+            pipefd[0],
+            IOManager::Event::READ),
+        true);
+
+    close(pipefd[0]);
+    close(pipefd[1]);
+}
 
 TEST(IOManagerTest, DeleteEvent)
 {
@@ -168,68 +174,68 @@ TEST(IOManagerTest, DeleteEvent)
     close(pipefd[1]);
 }
 
-// TEST(IOManagerTest, CancelEvent)
-// {
-//     IOManager iom;
+TEST(IOManagerTest, CancelEvent)
+{
+    IOManager iom;
 
-//     int pipefd[2];
-//     pipe(pipefd);
+    int pipefd[2];
+    pipe(pipefd);
 
-//     std::atomic<bool> called = false;
+    std::atomic<bool> called = false;
 
-//     iom.addEvent(
-//         pipefd[0],
-//         IOManager::Event::READ,
-//         [&]()
-//         {
-//             called = true;
-//         });
+    iom.addEvent(
+        pipefd[0],
+        IOManager::Event::READ,
+        [&]()
+        {
+            called = true;
+        });
 
-//     ASSERT_TRUE(iom.cancelEvent(pipefd[0], IOManager::Event::READ));
+    ASSERT_TRUE(iom.cancelEvent(pipefd[0], IOManager::Event::READ));
 
-//     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-//     ASSERT_TRUE(called);
+    ASSERT_TRUE(called);
 
-//     close(pipefd[0]);
-//     close(pipefd[1]);
-// }
+    close(pipefd[0]);
+    close(pipefd[1]);
+}
 
-// TEST(IOManagerTest, CancelAll)
-// {
-//     IOManager iom;
+TEST(IOManagerTest, CancelAll)
+{
+    IOManager iom;
 
-//     int pipefd[2];
-//     pipe(pipefd);
+    int pipefd[2];
+    pipe(pipefd);
 
-//     std::atomic<int> count = 0;
+    std::atomic<int> count = 0;
 
-//     iom.addEvent(
-//         pipefd[0],
-//         IOManager::Event::READ,
-//         [&]()
-//         {
-//             ++count;
-//         });
+    iom.addEvent(
+        pipefd[0],
+        IOManager::Event::READ,
+        [&]()
+        {
+            ++count;
+        });
 
-//     iom.addEvent(
-//         pipefd[1],
-//         IOManager::Event::WRITE,
-//         [&]()
-//         {
-//             ++count;
-//         });
+    iom.addEvent(
+        pipefd[1],
+        IOManager::Event::WRITE,
+        [&]()
+        {
+            ++count;
+        });
 
-//     ASSERT_TRUE(iom.cancelAll(pipefd[0]));
-//     ASSERT_TRUE(iom.cancelAll(pipefd[1]));
+    ASSERT_TRUE(iom.cancelAll(pipefd[0]));
+    ASSERT_TRUE(iom.cancelAll(pipefd[1]));
 
-//     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-//     ASSERT_EQ(count, 2);
+    ASSERT_EQ(count, 2);
 
-//     close(pipefd[0]);
-//     close(pipefd[1]);
-// }
+    close(pipefd[0]);
+    close(pipefd[1]);
+}
 
 TEST(IOManagerTest, MultiThread)
 {
@@ -284,35 +290,35 @@ TEST(IOManagerTest, FiberReadEvent)
     ASSERT_TRUE(finished);
 }
 
-// TEST(IOManagerTest, IOAndTimer)
-// {
-//     IOManager iom;
+TEST(IOManagerTest, IOAndTimer)
+{
+    IOManager iom;
 
-//     std::atomic<bool> timer = false;
-//     std::atomic<bool> io = false;
+    std::atomic<bool> timer = false;
+    std::atomic<bool> io = false;
 
-//     iom.addTimer(
-//         50,
-//         [&]()
-//         {
-//             timer = true;
-//         });
+    iom.addTimer(
+        50,
+        [&]()
+        {
+            timer = true;
+        });
 
-//     int pipefd[2];
-//     pipe(pipefd);
+    int pipefd[2];
+    pipe(pipefd);
 
-//     iom.addEvent(
-//         pipefd[0],
-//         IOManager::Event::READ,
-//         [&]()
-//         {
-//             io = true;
-//         });
+    iom.addEvent(
+        pipefd[0],
+        IOManager::Event::READ,
+        [&]()
+        {
+            io = true;
+        });
 
-//     write(pipefd[1], "x", 1);
+    write(pipefd[1], "x", 1);
 
-//     std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-//     ASSERT_TRUE(timer);
-//     ASSERT_TRUE(io);
-// }
+    ASSERT_TRUE(timer);
+    ASSERT_TRUE(io);
+}
