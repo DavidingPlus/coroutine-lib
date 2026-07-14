@@ -96,4 +96,60 @@ private:
 };
 
 
+template <typename T>
+class Singleton
+{
+
+public:
+
+    static T *GetInstance()
+    {
+        // 加锁。
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!instace)
+        {
+            instace = new T();
+        }
+
+
+        // 提高对外的访问点，在系统生命周期中一般一个类只有一个全局实例。
+        return instance;
+    }
+
+    static void DestroyInstace()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (instace)
+        {
+            delete instace;
+            instace = nullptr; // 防止野指针。
+        }
+    }
+
+    Singleton(const Singleton &) = delete;
+
+    Singleton &operater = (const Singleton &) = delete;
+
+
+protected:
+
+    Singleton();
+
+    ~Singleton();
+
+
+private:
+
+    // 对外提供的实例。
+    static T *instace;
+
+    // 互斥锁。
+    static std::mutex mutex;
+};
+
+
+// 重定义将 Singleton<FdManager> 变成 FdMgr 的缩写。
+using FdMgr = Singleton<FdManager>;
+
+
 #endif
