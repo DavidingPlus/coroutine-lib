@@ -317,3 +317,81 @@ retry:
 
     return n;
 }
+
+
+extern "C"
+{
+
+// 使用 X-Macro 技巧批量定义所有 hook 函数对应的原始函数指针，并初始化为空。
+// 例如：
+//
+// XX(sleep)
+//
+// 会展开为：
+//
+// sleep_fun sleep_f = nullptr;
+//
+// 最终 HOOK_FUN(XX) 会展开成：
+//
+// sleep_fun sleep_f = nullptr;
+// usleep_fun usleep_f = nullptr;
+// socket_fun socket_f = nullptr;
+// connect_fun connect_f = nullptr;
+// ...
+//
+// 后续在 hook 初始化阶段，再通过 dlsym(RTLD_NEXT, "...") 为这些函数指针赋值，使其指向 libc 中对应的原始系统调用实现。
+#define XX(name) name##_fun name##_f = nullptr;
+    HOOK_FUN(XX)
+#undef XX
+
+
+    ssize_t read(int fd, void *buf, size_t count)
+    {
+        return doIo(fd, read_f, "read", static_cast<uint32_t>(IOManager::Event::READ), SO_RCVTIMEO, buf, count);
+    }
+
+    ssize_t readv(int fd, const struct iovec *iov, int iovcnt)
+    {
+        return doIo(fd, readv_f, "readv", static_cast<uint32_t>(IOManager::Event::READ), SO_RCVTIMEO, iov, iovcnt);
+    }
+
+    ssize_t recv(int sockfd, void *buf, size_t len, int flags)
+    {
+        return doIo(sockfd, recv_f, "recv", static_cast<uint32_t>(IOManager::Event::READ), SO_RCVTIMEO, buf, len, flags);
+    }
+
+    ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen)
+    {
+        return doIo(sockfd, recvfrom_f, "recvfrom", static_cast<uint32_t>(IOManager::Event::READ), SO_RCVTIMEO, buf, len, flags, src_addr, addrlen);
+    }
+
+    ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags)
+    {
+        return doIo(sockfd, recvmsg_f, "recvmsg", static_cast<uint32_t>(IOManager::Event::READ), SO_RCVTIMEO, msg, flags);
+    }
+
+    ssize_t write(int fd, const void *buf, size_t count)
+    {
+        return doIo(fd, write_f, "write", static_cast<uint32_t>(IOManager::Event::WRITE), SO_SNDTIMEO, buf, count);
+    }
+
+    ssize_t writev(int fd, const struct iovec *iov, int iovcnt)
+    {
+        return doIo(fd, writev_f, "writev", static_cast<uint32_t>(IOManager::Event::WRITE), SO_SNDTIMEO, iov, iovcnt);
+    }
+
+    ssize_t send(int sockfd, const void *buf, size_t len, int flags)
+    {
+        return doIo(sockfd, send_f, "send", static_cast<uint32_t>(IOManager::Event::WRITE), SO_SNDTIMEO, buf, len, flags);
+    }
+
+    ssize_t sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen)
+    {
+        return doIo(sockfd, sendto_f, "sendto", static_cast<uint32_t>(IOManager::Event::WRITE), SO_SNDTIMEO, buf, len, flags, dest_addr, addrlen);
+    }
+
+    ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags)
+    {
+        return doIo(sockfd, sendmsg_f, "sendmsg", static_cast<uint32_t>(IOManager::Event::WRITE), SO_SNDTIMEO, msg, flags);
+    }
+}
