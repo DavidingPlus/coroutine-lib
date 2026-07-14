@@ -345,6 +345,61 @@ extern "C"
 #undef XX
 
 
+    // 实现了一个协程版本的 sleep，通过钩子机制拦截 sleep 的调用，并将其改为使用协程来实现非阻塞的休眠。
+    unsigned int sleep(unsigned int seconds)
+    {
+        // 如果钩子未启用，则调用原始的系统调用。
+        if (!tHookEnable) return sleep_f(seconds);
+
+        // 获取当前正在执行的协程（Fiber），并将其保存到 fiber 变量中。
+        std::shared_ptr<Fiber> fiber = Fiber::GetThis();
+        // 获取当前线程的调度器对象（IOManager）指针，用于添加定时器任务。
+        IOManager *iom = IOManager::GetThis();
+
+        iom->addTimer(seconds * 1000, [fiber, iom]()
+                      { iom->scheduleLock(fiber); });
+        // 挂起当前协程的执行，将控制权交还给调度器。
+        fiber->yield();
+
+
+        return 0;
+    }
+
+    int usleep(useconds_t usec)
+    {
+        if (!tHookEnable) return usleep_f(usec);
+
+        std::shared_ptr<Fiber> fiber = Fiber::GetThis();
+        IOManager *iom = IOManager::GetThis();
+
+        // useconds_t 一个无符号整数类型，通常用于表示微秒数。在这个函数中，usec 表示延时的微秒数，将其转换为毫秒数 (usec/1000) 后用于定时器。
+        iom->addTimer(usec / 1000, [fiber, iom]()
+                      { iom->scheduleLock(fiber); });
+        fiber->yield();
+
+
+        return 0;
+    }
+
+    int nanosleep(const struct timespec *req, struct timespec *rem)
+    {
+        if (!tHookEnable) return nanosleep_f(req, rem);
+
+        // 将 tv_sec 转换为毫秒，并将 tv_nsec 转换为毫秒，然后两者相加得到总的超时毫秒数。所以从这里看出实现的也是一个毫秒级的操作。
+        int timeoutMs = req->tv_sec * 1000 + req->tv_nsec / 1000 / 1000;
+
+        std::shared_ptr<Fiber> fiber = Fiber::GetThis();
+        IOManager *iom = IOManager::GetThis();
+
+        iom->addTimer(timeoutMs, [fiber, iom]()
+                      { iom->scheduleLock(fiber); });
+        fiber->yield();
+
+
+        return 0;
+    }
+
+
     ssize_t read(int fd, void *buf, size_t count)
     {
         return doIo(fd, read_f, "read", static_cast<uint32_t>(IOManager::Event::READ), SO_RCVTIMEO, buf, count);
