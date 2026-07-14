@@ -419,6 +419,36 @@ extern "C"
         return fd;
     }
 
+    int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
+    {
+        int fd = doIo(sockfd, accept_f, "accept", static_cast<uint32_t>(IOManager::Event::READ), SO_RCVTIMEO, addr, addrlen);
+        // 同理添加到文件描述符管理器 FdManager 中。
+        if (fd >= 0) FdMgr::GetInstance()->get(fd, true);
+
+
+        return fd;
+    }
+
+    int close(int fd)
+    {
+        if (!tHookEnable) return close_f(fd);
+        // 获得 FdManager 管理的 FdCtx 对象。
+        std::shared_ptr<FdCtx> ctx = FdMgr::GetInstance()->get(fd);
+
+        if (ctx)
+        {
+            // 删除 fd 以前，取消文件描述符 fd 上的所有事件，并触发所有回调函数。
+            auto iom = IOManager::GetThis();
+            if (iom) iom->cancelAll(fd);
+
+            FdMgr::GetInstance()->del(fd);
+        }
+
+
+        // 处理完后调用原始系统调用，完成系统原生 fd 的删除。del() 函数不包含这部分的操作。
+        return close_f(fd);
+    }
+
     ssize_t read(int fd, void *buf, size_t count)
     {
         return doIo(fd, read_f, "read", static_cast<uint32_t>(IOManager::Event::READ), SO_RCVTIMEO, buf, count);
