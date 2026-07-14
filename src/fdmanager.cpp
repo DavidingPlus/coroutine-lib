@@ -4,10 +4,10 @@
 #include <fcntl.h>
 
 
-// 模板实例化。FdManager 类有一个全局唯一的单例实例。
+// 显式实例化 Singleton<FdManager> 模板。使编译器生成 FdManager 对应的单例模板代码，避免模板成员在多个编译单元中重复实例化。
 template class Singleton<FdManager>;
 
-// 静态成员变量需要在类外部定义和初始化。
+// 模板静态成员变量定义。类内只声明了静态成员，这里需要在类外进行定义和初始化。每一种模板类型都会拥有独立的一份静态成员变量。
 template <typename T>
 T *Singleton<T>::instance = nullptr;
 
@@ -65,4 +65,44 @@ void FdCtx::setTimeout(int type, uint64_t v)
     {
         m_sendTimeout = v;
     }
+}
+
+std::shared_ptr<FdCtx> FdManager::get(int fd, bool autoCreate)
+{
+    // 文件描述符无效则直接返回。
+    if (-1 == fd) return nullptr;
+
+    std::shared_lock<std::shared_mutex> readLock(m_mutex);
+    // 如果 fd 超出了 m_datas 的范围，并且 autoCreate 为 false，则返回 nullptr，表示没有创建新对象的需求。
+    if (m_datas.size() <= fd)
+    {
+        if (!autoCreate) return nullptr;
+    }
+    // 如果 fd 在 m_datas 范围内，如果 m_datas[fd] 有数据即不为空，直接返回。如果为空但不允许创建，直接返回 nullptr，二者条件综合就是下面的这个式子。为空但允许创建就会走到下面扩容再创建的分支。
+    else
+    {
+        if (m_datas[fd] || !autoCreate) return m_datas[fd];
+    }
+
+    // 当 fd 的大小超出 m_data.size() 的值也就是 m_datas[fd] 数组中没找到对应的 fd 并且 autoCreate 为 true 时候会走到这里，先扩容，然后创建新对象。
+    readLock.unlock();
+    std::unique_lock<std::shared_mutex> writeLock(m_mutex);
+
+    // 扩容 m_datas 数组，使其能够存储 fd 对应的 FdCtx。使用 fd * 3 / 2 + 1 而不是 fd * 1.5 进行扩容，相比直接扩容到 fd + 1 可以减少频繁扩容次数，同时避免使用浮点数计算带来的隐式类型转换问题。例如 1 * 1.5 -> 1(int)
+    if (m_datas.size() <= fd) m_datas.resize(fd * 3 / 2 + 1);
+
+    m_datas[fd] = std::make_shared<FdCtx>(fd);
+
+
+    return m_datas[fd];
+}
+
+void FdManager::del(int fd)
+{
+    std::unique_lock<std::shared_mutex> writeLock(m_mutex);
+
+    if (fd >= m_datas.size()) return;
+
+    // reset() 用于释放当前 shared_ptr 对对象的所有权，并将智能指针置为 nullptr。调用 reset() 后，该 shared_ptr 不再持有对象，对象的引用计数会减少。如果当前 shared_ptr 是管理该对象的最后一个所有者，则对象会被自动销毁。
+    m_datas[fd].reset();
 }

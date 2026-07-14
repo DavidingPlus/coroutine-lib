@@ -74,14 +74,13 @@ private:
 
 
 // 用于管理 FdCtx 对象的集合。它提供了对文件描述符上下文的访问和管理功能。
-// 显然这个类是一个单例模式，确保类只有一个全局实例，并提供全局访问点。
 class FdManager
 {
 
 public:
 
     // 构造函数。
-    FdManager();
+    FdManager() { m_datas.resize(64); }
 
     // 获取指定文件描述符的 FdCtx 对象。如果 autoCreate 为 true，在不存在时自动创建新的 FdCtx 对象。
     std::shared_ptr<FdCtx> get(int fd, bool autoCreate = false);
@@ -100,6 +99,8 @@ private:
 };
 
 
+// 单例模板类。用于保证指定类型 T 在整个程序生命周期内只有一个全局实例，并提供统一的全局访问入口。
+// 该实现采用懒加载方式：只有第一次调用 GetInstance() 时才会创建对象。同时通过互斥锁保证多线程环境下实例创建过程的线程安全。
 template <typename T>
 class Singleton
 {
@@ -153,6 +154,7 @@ private:
 
 
 // 重定义将 Singleton<FdManager> 变成 FdMgr 的缩写。
+// 显然 FdManager 类需要作为单例模式使用，确保类只有一个全局实例，并提供全局访问点。
 using FdMgr = Singleton<FdManager>;
 
 

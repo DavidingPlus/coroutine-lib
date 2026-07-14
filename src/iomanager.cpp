@@ -176,7 +176,7 @@ int IOManager::addEvent(int fd, Event event, std::function<void()> cb)
         readLock.unlock();
         std::unique_lock<std::shared_mutex> writeLock(m_mutex);
 
-        contextResize(fd * 1.5);
+        contextResize(fd * 3 / 2 + 1);
         fdCtx = m_fdContexts[fd];
     }
 
