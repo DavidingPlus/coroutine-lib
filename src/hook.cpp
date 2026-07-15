@@ -433,8 +433,10 @@ extern "C"
 
         // 获取文件描述符 fd 的上下文信息 FdCtx。
         std::shared_ptr<FdCtx> ctx = FdMgr::GetInstance()->get(fd);
-        // 检查文件描述符上下文是否存在或是否已关闭。
-        if (!ctx || ctx->isClosed())
+        // 如果上下文不存在，则直接回落到原始 connect 保持系统 errno 语义。
+        if (!ctx) return connect_f(fd, addr, addrlen);
+        // 检查文件描述符上下文是否已关闭。
+        if (ctx->isClosed())
         {
             // EBADF 表示一个无效的文件描述符。
             errno = EBADF;
@@ -641,8 +643,12 @@ extern "C"
             // 检查获取的上下文对象是否有效（即 ctx 是否为空）。如果上下文对象无效、文件描述符已关闭或不是一个套接字，则直接调用原始的 ioctl 函数，返回处理结果。
             if (!ctx || ctx->isClosed() || !ctx->isSocket()) return ioctl_f(fd, request, arg);
 
-            // 如果上下文对象有效，调用其 setUserNonblock 方法，将非阻塞模式设置为 userNonblock 指定的值。这将更新文件描述符的非阻塞状态。
+            // 如果上下文对象有效，调用 setUserNonblock 方法，将非阻塞模式设置为 userNonblock 指定的值。这将更新文件描述符的非阻塞状态。
             ctx->setUserNonblock(userNonblock);
+
+            // Hook 的前提是 socket 始终保持内核 nonblock。用户语义改成阻塞不代表框架可以把底层 nonblock 去掉，实际传给内核的标志需要保留框架自己的 nonblock 状态。
+            int sysFlag = ctx->getSysNonblock() || userNonblock;
+            return ioctl_f(fd, request, &sysFlag);
         }
 
 

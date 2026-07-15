@@ -465,6 +465,42 @@ TEST(HookIOTest, ReadvWaitEvent)
     EXPECT_EQ(close(fd[1]), 0);
 }
 
+TEST(ConnectHookTest, InvalidFd)
+{
+    setHookEnable(true);
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(1);
+
+    EXPECT_EQ(connect(-1, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)), -1);
+    EXPECT_EQ(errno, EBADF);
+
+    setHookEnable(false);
+}
+
+TEST(ConnectHookTest, NonSocketFdFallsBackToSyscall)
+{
+    setHookEnable(true);
+
+    int fd[2];
+    ASSERT_EQ(pipe(fd), 0);
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(1);
+
+    EXPECT_EQ(connect(fd[0], reinterpret_cast<sockaddr *>(&addr), sizeof(addr)), -1);
+    EXPECT_EQ(errno, ENOTSOCK);
+
+    EXPECT_EQ(close(fd[0]), 0);
+    EXPECT_EQ(close(fd[1]), 0);
+
+    setHookEnable(false);
+}
+
 TEST(AcceptHookTest, RegisterAcceptedFd)
 {
     setHookEnable(true);
@@ -717,4 +753,52 @@ TEST(NanoSleepHookTest, Basic)
 
     EXPECT_GE(cost, 1000);
     EXPECT_LT(cost, 2000);
+}
+
+TEST(IoctlHookTest, SocketFionbioSyncsUserNonblock)
+{
+    setHookEnable(true);
+
+    IOManager iom(1, false);
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(fd, 0);
+
+    auto ctx = FdMgr::GetInstance()->get(fd);
+    ASSERT_NE(ctx, nullptr);
+    EXPECT_FALSE(ctx->getUserNonblock());
+
+    int flag = 1;
+    ASSERT_EQ(ioctl(fd, FIONBIO, &flag), 0) << strerror(errno);
+    EXPECT_TRUE(ctx->getUserNonblock());
+    EXPECT_TRUE(fcntl(fd, F_GETFL, 0) & O_NONBLOCK);
+
+    flag = 0;
+    ASSERT_EQ(ioctl(fd, FIONBIO, &flag), 0) << strerror(errno);
+    EXPECT_FALSE(ctx->getUserNonblock());
+    EXPECT_TRUE(fcntl(fd, F_GETFL, 0) & O_NONBLOCK);
+
+    EXPECT_EQ(close(fd), 0);
+
+    setHookEnable(false);
+}
+
+TEST(IoctlHookTest, NonSocketFionbioFallsBackToSyscall)
+{
+    setHookEnable(true);
+
+    int fd[2];
+    ASSERT_EQ(pipe(fd), 0);
+    EXPECT_EQ(FdMgr::GetInstance()->get(fd[0]), nullptr);
+
+    int flag = 1;
+    ASSERT_EQ(ioctl(fd[0], FIONBIO, &flag), 0) << strerror(errno);
+
+    EXPECT_EQ(FdMgr::GetInstance()->get(fd[0]), nullptr);
+    EXPECT_TRUE(fcntl(fd[0], F_GETFL, 0) & O_NONBLOCK);
+
+    EXPECT_EQ(close(fd[0]), 0);
+    EXPECT_EQ(close(fd[1]), 0);
+
+    setHookEnable(false);
 }
