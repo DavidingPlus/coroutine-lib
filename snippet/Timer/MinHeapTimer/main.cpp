@@ -8,7 +8,7 @@
 #include "timer.h"
 
 
-static uint64_t getNowMs()
+static uint64_t getCurrentMs()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -18,7 +18,7 @@ TEST(TimerTest, BasicExpire)
 {
     TimerManager tmr;
     std::atomic<bool> called = false;
-    uint64_t now = getNowMs();
+    uint64_t now = getCurrentMs();
 
     tmr.add(
         now + 50,
@@ -42,7 +42,7 @@ TEST(TimerTest, NotExpire)
 {
     TimerManager tmr;
     bool called = false;
-    uint64_t now = getNowMs();
+    uint64_t now = getCurrentMs();
 
     tmr.add(
         now + 1000,
@@ -59,7 +59,7 @@ TEST(TimerTest, ExecuteOrder)
 {
     TimerManager tmr;
     std::vector<int> vec;
-    uint64_t now = getNowMs();
+    uint64_t now = getCurrentMs();
 
     tmr.add(
         now + 100,
@@ -97,7 +97,7 @@ TEST(TimerTest, SameExpireTime)
 {
     TimerManager tmr;
     std::atomic<int> count = 0;
-    uint64_t now = getNowMs();
+    uint64_t now = getCurrentMs();
 
     for (int i = 0; i < 10; ++i)
     {
@@ -126,7 +126,7 @@ TEST(TimerTest, CancelTimer)
 {
     TimerManager tmr;
     bool called = false;
-    uint64_t now = getNowMs();
+    uint64_t now = getCurrentMs();
 
     auto id = tmr.add(
         now + 50,
@@ -148,7 +148,7 @@ TEST(TimerTest, CancelMiddleTimer)
 {
     TimerManager tmr;
     std::vector<int> vec;
-    uint64_t now = getNowMs();
+    uint64_t now = getCurrentMs();
 
     auto id1 = tmr.add(
         now + 100,
@@ -188,7 +188,7 @@ TEST(TimerTest, CancelInvalidId)
 {
     TimerManager tmr;
     bool called = false;
-    uint64_t now = getNowMs();
+    uint64_t now = getCurrentMs();
 
     tmr.add(
         now + 20,
@@ -210,7 +210,7 @@ TEST(TimerTest, HeapAdjust)
 {
     TimerManager tmr;
     std::atomic<int> count = 0;
-    uint64_t now = getNowMs();
+    uint64_t now = getCurrentMs();
     std::vector<TimerManager::TimerId> ids;
 
     for (int i = 0; i < 100; ++i)

@@ -391,7 +391,7 @@ extern "C"
         if (!tHookEnable) return nanosleep_f(req, rem);
 
         // 将 tv_sec 转换为毫秒，并将 tv_nsec 转换为毫秒，然后两者相加得到总的超时毫秒数。所以从这里看出实现的也是一个毫秒级的操作。
-        int timeoutMs = req->tv_sec * 1000 + req->tv_nsec / 1000 / 1000;
+        uint64_t timeoutMs = req->tv_sec * 1000 + req->tv_nsec / 1000 / 1000;
 
         std::shared_ptr<Fiber> fiber = Fiber::GetThis();
         IOManager *iom = IOManager::GetThis();

@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 
-static uint64_t getNowMs()
+static uint64_t getCurrentMs()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -535,14 +535,14 @@ TEST(SleepHookTest, ParallelSleep)
 
     IOManager iom(2, false);
 
-    auto begin = getNowMs();
+    auto begin = getCurrentMs();
 
     iom.scheduleLock([]()
                      { sleep(1); });
     iom.scheduleLock([]()
                      { sleep(1); });
 
-    auto cost = getNowMs() - begin;
+    auto cost = getCurrentMs() - begin;
 
     EXPECT_LT(cost, 1500);
 
@@ -558,11 +558,11 @@ TEST(UsleepHookTest, Precision)
                      {
                          setHookEnable(true);
 
-                         auto begin = getNowMs();
+                         auto begin = getCurrentMs();
 
                          usleep(100000);
 
-                         auto end = getNowMs();
+                         auto end = getCurrentMs();
 
                          cost = end - begin;
 
@@ -578,7 +578,6 @@ TEST(UsleepHookTest, Precision)
 TEST(UsleepHookTest, Zero)
 {
     IOManager iom(2, false);
-    std::atomic<uint64_t> cost = 0;
 
     iom.scheduleLock([&]()
                      {
@@ -590,30 +589,32 @@ TEST(UsleepHookTest, Zero)
                      });
 }
 
-// TODO
-// TEST(NanoSleepHookTest, Basic)
-// {
-//     IOManager iom(2, false);
-//     std::atomic<uint64_t> cost = 0;
-//     timespec ts{.tv_sec = 1, .tv_nsec = 0};
+TEST(NanoSleepHookTest, Basic)
+{
+    IOManager iom(2, false);
+    std::atomic<uint64_t> cost = 0;
+    timespec ts = {
+        .tv_sec = 1,
+        .tv_nsec = 0,
+    };
 
-//     iom.scheduleLock([&]()
-//                      {
-//                          setHookEnable(true);
+    iom.scheduleLock([&]()
+                     {
+                         setHookEnable(true);
 
-//                          auto begin = getNowMs();
+                         auto begin = getCurrentMs();
 
-//                          EXPECT_EQ(nanosleep(&ts, nullptr), 0);
+                         EXPECT_EQ(nanosleep(&ts, nullptr), 0);
 
-//                          auto end = getNowMs();
+                         auto end = getCurrentMs();
 
-//                          cost = end - begin;
+                         cost = end - begin;
 
-//                          setHookEnable(false); //
-//                      });
+                         setHookEnable(false); //
+                     });
 
-//     std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
 
-//     EXPECT_GE(cost, 1000);
-//     EXPECT_LT(cost, 2000);
-// }
+    EXPECT_GE(cost, 1000);
+    EXPECT_LT(cost, 2000);
+}

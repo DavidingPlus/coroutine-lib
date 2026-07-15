@@ -143,7 +143,7 @@ TEST(FdManagerTest, DeleteContext)
 
 TEST(FdManagerTest, LargeFd)
 {
-    std::vector<int> fds;
+    FdManager mgr;
     int fd = -1;
 
     for (int i = 0; i < 10000; ++i)
@@ -151,17 +151,13 @@ TEST(FdManagerTest, LargeFd)
         fd = open(std::string("/tmp/fdmanager_large_test" + std::to_string(i)).data(), O_CREAT | O_RDWR, 0644);
         ASSERT_GE(fd, 0);
 
-        fds.emplace_back(fd);
+        auto ctx = mgr.get(fd, true);
+
+        ASSERT_NE(ctx, nullptr);
+        EXPECT_TRUE(ctx->isInit());
+
+        close(fd);
     }
-
-    FdManager mgr;
-
-    auto ctx = mgr.get(fd, true);
-
-    ASSERT_NE(ctx, nullptr);
-    EXPECT_TRUE(ctx->isInit());
-
-    for (auto f : fds) close(f);
 }
 
 TEST(FdManagerTest, ConcurrentGet)
