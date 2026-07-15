@@ -15,6 +15,12 @@
 #include <unistd.h>
 
 
+static uint64_t getNowMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+
 TEST(HookTest, HookEnableDefault)
 {
     setHookEnable(false);
@@ -47,6 +53,8 @@ TEST(SocketHookTest, TCPRegister)
 {
     setHookEnable(true);
 
+    IOManager iom(1, false);
+
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     ASSERT_GE(fd, 0);
 
@@ -65,6 +73,8 @@ TEST(SocketHookTest, UDPRegister)
 {
     setHookEnable(true);
 
+    IOManager iom(1, false);
+
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     ASSERT_GE(fd, 0);
 
@@ -82,6 +92,8 @@ TEST(SocketHookTest, CreateFailed)
 {
     setHookEnable(true);
 
+    IOManager iom(1, false);
+
     int fd = socket(-1, SOCK_STREAM, 0);
     EXPECT_EQ(fd, -1);
 
@@ -91,6 +103,8 @@ TEST(SocketHookTest, CreateFailed)
 TEST(CloseHookTest, RemoveFdCtx)
 {
     setHookEnable(true);
+
+    IOManager iom(1, false);
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     ASSERT_GE(fd, 0);
@@ -106,6 +120,8 @@ TEST(CloseHookTest, ClosePipe)
 {
     setHookEnable(true);
 
+    IOManager iom(1, false);
+
     int fd[2];
 
     ASSERT_EQ(pipe(fd), 0);
@@ -119,6 +135,8 @@ TEST(CloseHookTest, DoubleClose)
 {
     setHookEnable(true);
 
+    IOManager iom(1, false);
+
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     ASSERT_GE(fd, 0);
 
@@ -131,6 +149,8 @@ TEST(CloseHookTest, DoubleClose)
 TEST(SocketTimeoutTest, ReceiveTimeout)
 {
     setHookEnable(true);
+
+    IOManager iom(1, false);
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     ASSERT_GE(fd, 0);
@@ -156,6 +176,8 @@ TEST(SocketTimeoutTest, SendTimeout)
 {
     setHookEnable(true);
 
+    IOManager iom(1, false);
+
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     ASSERT_GE(fd, 0);
 
@@ -180,6 +202,8 @@ TEST(SocketTimeoutTest, NormalOption)
 {
     setHookEnable(true);
 
+    IOManager iom(1, false);
+
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     ASSERT_GE(fd, 0);
 
@@ -194,6 +218,8 @@ TEST(SocketTimeoutTest, NormalOption)
 TEST(IOHookTest, PipeReadWrite)
 {
     setHookEnable(true);
+
+    IOManager iom(1, false);
 
     int fd[2];
     ASSERT_EQ(pipe(fd), 0);
@@ -214,6 +240,8 @@ TEST(IOHookTest, PipeReadWrite)
 TEST(IOHookTest, PipeMultiReadWrite)
 {
     setHookEnable(true);
+
+    IOManager iom(1, false);
 
     int fd[2];
     ASSERT_EQ(pipe(fd), 0);
@@ -236,6 +264,8 @@ TEST(IOHookTest, InvalidRead)
 {
     setHookEnable(true);
 
+    IOManager iom(1, false);
+
     char buf[8];
 
     EXPECT_EQ(read(-1, buf, sizeof(buf)), -1);
@@ -247,6 +277,8 @@ TEST(IOHookTest, InvalidRead)
 TEST(HookIOTest, ReadvWritevBasic)
 {
     setHookEnable(true);
+
+    IOManager iom(1, false);
 
     int fd[2];
     ASSERT_EQ(pipe(fd), 0);
@@ -290,6 +322,8 @@ TEST(HookIOTest, ReadvWritevManyBuffers)
 {
     setHookEnable(true);
 
+    IOManager iom(1, false);
+
     int fd[2];
     ASSERT_EQ(pipe(fd), 0);
 
@@ -320,120 +354,266 @@ TEST(HookIOTest, ReadvWritevManyBuffers)
     setHookEnable(false);
 }
 
-// TEST(HookIOTest, ReadvWaitEvent)
-// {
-//     setHookEnable(true);
+TEST(HookIOTest, ReadvBasic)
+{
+    int fd[2];
+    pipe(fd);
 
-//     int fd[2];
-//     ASSERT_EQ(pipe(fd), 0);
+    std::thread t([&]
+                  {
+                      char a[8]{};
+                      char b[8]{};
 
-//     IOManager iom(2, false);
-//     std::atomic<bool> finished = false;
+                      iovec iov[] = {
+                          {a, 5},
+                          {b, 2}};
 
-//     iom.scheduleLock([&]()
-//                      {
-//                          char a[8] = {};
-//                          char b[8] = {};
+                      EXPECT_EQ(readv(fd[0], iov, 2), 7); //
+                  });
 
-//                          iovec iov[2];
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-//                          iov[0].iov_base = a;
-//                          iov[0].iov_len = 7;
+    ASSERT_EQ(write(fd[1], "hello", 5), 5);
+    ASSERT_EQ(write(fd[1], "!!", 2), 2);
 
-//                          iov[1].iov_base = b;
-//                          iov[1].iov_len = 7;
+    t.join();
+}
 
-//                          auto n = readv(fd[0], iov, 2);
-//                          EXPECT_EQ(n, 7);
+TEST(HookIOTest, ReadvWaitEvent)
+{
+    int fd[2];
+    ASSERT_EQ(pipe(fd), 0);
 
-//                          EXPECT_STREQ(a, "hello");
+    IOManager iom(1, false);
+    std::atomic<bool> finished = false;
 
-//                          finished = true; //
-//                      });
+    iom.scheduleLock([&]
+                     {
+                         setHookEnable(true);
 
-//     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                         char a[8] = {};
+                         char b[8] = {};
 
-//     EXPECT_FALSE(finished);
+                         iovec iov[2] = {
+                             {a, 5},
+                             {b, 2}};
 
-//     write(fd[1], "hello", 5);
-//     write(fd[1], "!!", 2);
+                         EXPECT_EQ(readv(fd[0], iov, 2), 7);
 
-//     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-//     EXPECT_TRUE(finished);
+                         EXPECT_STREQ(a, "hello");
+                         EXPECT_STREQ(b, "!!");
 
-//     EXPECT_EQ(close(fd[0]), 0);
-//     EXPECT_EQ(close(fd[1]), 0);
-// }
+                         finished = true;
 
+                         setHookEnable(false); //
+                     });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    EXPECT_FALSE(finished);
+
+    setHookEnable(true);
+
+    ASSERT_EQ(write(fd[1], "hello", 5), 5);
+    ASSERT_EQ(write(fd[1], "!!", 2), 2);
+
+    setHookEnable(false);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    EXPECT_TRUE(finished);
+
+    EXPECT_EQ(close(fd[0]), 0);
+    EXPECT_EQ(close(fd[1]), 0);
+}
+
+// TODO
 // TEST(AcceptHookTest, RegisterAcceptedFd)
 // {
 //     setHookEnable(true);
 
+//     IOManager iom(1, false);
+
+//     // 创建监听 socket。
 //     int listenFd = socket(AF_INET, SOCK_STREAM, 0);
 //     ASSERT_GE(listenFd, 0);
 
 //     sockaddr_in addr{};
 //     addr.sin_family = AF_INET;
 //     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+//     addr.sin_port = htons(1234);
 
-//     bind(listenFd, (sockaddr *)&addr, sizeof(addr));
+//     ASSERT_EQ(bind(listenFd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)), 0) << strerror(errno);
 
-//     listen(listenFd, 5);
+//     ASSERT_EQ(listen(listenFd, 5), 0) << strerror(errno);
 
 //     socklen_t len = sizeof(addr);
-//     getsockname(listenFd, (sockaddr *)&addr, &len);
+//     ASSERT_EQ(getsockname(listenFd, reinterpret_cast<sockaddr *>(&addr), &len), 0) << strerror(errno);
+//     std::cout << "Listen Port = " << ntohs(addr.sin_port) << std::endl;
 
-//     std::thread t([&]()
-//                   {
-//                       int fd = socket(AF_INET, SOCK_STREAM, 0);
+//     // 客户端线程。
+//     std::thread client([&]()
+//                        {
+//                            int fd = socket(AF_INET, SOCK_STREAM, 0);
+//                            ASSERT_GE(fd, 0);
 
-//                       connect(fd, (sockaddr *)&addr, sizeof(addr));
+//                            int res = connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr));
 
-//                       close(fd); //
-//                   });
+//                            ASSERT_EQ(res, 0) << strerror(errno);
 
-//     int clientFd = accept(listenFd, nullptr, nullptr);
-//     ASSERT_GE(clientFd, 0);
+//                            EXPECT_EQ(close(fd), 0); //
+//                        });
+
+//     std::cout << "Waiting accept..." << std::endl;
+
+//     sockaddr_in clientAddr{};
+//     len = sizeof(clientAddr);
+//     int clientFd = accept(listenFd, reinterpret_cast<sockaddr *>(&clientAddr), &len);
+
+//     ASSERT_GE(clientFd, 0) << strerror(errno);
+
+//     std::cout << "Accept fd = " << clientFd << std::endl;
 
 //     auto ctx = FdMgr::GetInstance()->get(clientFd);
+
 //     ASSERT_NE(ctx, nullptr);
+
 //     EXPECT_TRUE(ctx->isSocket());
+//     EXPECT_FALSE(ctx->isClosed());
 
-//     close(clientFd);
-//     close(listenFd);
+//     EXPECT_EQ(close(clientFd), 0);
+//     EXPECT_EQ(close(listenFd), 0);
 
-//     t.join();
+//     client.join();
+
+//     setHookEnable(false);
 // }
 
-// TEST(SleepHookTest, FiberSchedule)
+TEST(SleepHookTest, FiberSchedule)
+{
+    setHookEnable(true);
+
+    IOManager iom(2, false);
+    std::vector<int> order;
+
+    iom.scheduleLock([&]()
+                     {
+                         order.push_back(1);
+
+                         sleep(1);
+
+                         order.push_back(3); //
+                     });
+
+    iom.scheduleLock([&]()
+                     {
+                         order.push_back(2); //
+                     });
+
+    // 主线程不启用 hook。
+    setHookEnable(false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    setHookEnable(true);
+
+    ASSERT_EQ(order.size(), 2);
+    EXPECT_EQ(order[0], 1);
+    EXPECT_EQ(order[1], 2);
+
+    setHookEnable(false);
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    setHookEnable(true);
+
+    ASSERT_EQ(order.size(), 3);
+    EXPECT_EQ(order[2], 3);
+
+    setHookEnable(false);
+}
+
+TEST(SleepHookTest, ParallelSleep)
+{
+    setHookEnable(true);
+
+    IOManager iom(2, false);
+
+    auto begin = getNowMs();
+
+    iom.scheduleLock([]()
+                     { sleep(1); });
+    iom.scheduleLock([]()
+                     { sleep(1); });
+
+    auto cost = getNowMs() - begin;
+
+    EXPECT_LT(cost, 1500);
+
+    setHookEnable(false);
+}
+
+TEST(UsleepHookTest, Precision)
+{
+    IOManager iom(2, false);
+    std::atomic<uint64_t> cost = 0;
+
+    iom.scheduleLock([&]()
+                     {
+                         setHookEnable(true);
+
+                         auto begin = getNowMs();
+
+                         usleep(100000);
+
+                         auto end = getNowMs();
+
+                         cost = end - begin;
+
+                         setHookEnable(false); //
+                     });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+    EXPECT_GE(cost, 100);
+    EXPECT_LT(cost, 200);
+}
+
+TEST(UsleepHookTest, Zero)
+{
+    IOManager iom(2, false);
+    std::atomic<uint64_t> cost = 0;
+
+    iom.scheduleLock([&]()
+                     {
+                         setHookEnable(true);
+
+                         EXPECT_EQ(usleep(0), 0);
+
+                         setHookEnable(false); //
+                     });
+}
+
+// TODO
+// TEST(NanoSleepHookTest, Basic)
 // {
-//     setHookEnable(true);
-
 //     IOManager iom(2, false);
-//     std::vector<int> order;
+//     std::atomic<uint64_t> cost = 0;
+//     timespec ts{.tv_sec = 1, .tv_nsec = 0};
 
 //     iom.scheduleLock([&]()
 //                      {
-//                          order.push_back(1);
+//                          setHookEnable(true);
 
-//                          sleep(1);
+//                          auto begin = getNowMs();
 
-//                          order.push_back(3); //
+//                          EXPECT_EQ(nanosleep(&ts, nullptr), 0);
+
+//                          auto end = getNowMs();
+
+//                          cost = end - begin;
+
+//                          setHookEnable(false); //
 //                      });
 
-//     iom.scheduleLock([&]()
-//                      {
-//                          order.push_back(2); //
-//                      });
+//     std::this_thread::sleep_for(std::chrono::milliseconds(150));
 
-//     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-//     ASSERT_EQ(order.size(), 2);
-//     EXPECT_EQ(order[0], 1);
-//     EXPECT_EQ(order[1], 2);
-
-//     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-
-//     ASSERT_EQ(order.size(), 3);
-//     EXPECT_EQ(order[2], 3);
+//     EXPECT_GE(cost, 1000);
+//     EXPECT_LT(cost, 2000);
 // }

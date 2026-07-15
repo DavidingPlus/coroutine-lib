@@ -116,7 +116,14 @@ void Scheduler::stop()
 
     // 3. 唤醒所有睡眠中的线程。
     // 调用 tickle() 的目的唤醒空闲线程或协程，防止 m_scheduler 或其他线程处于永久阻塞在等待任务的状态中。
-    for (size_t i = 0; i < m_threadCount; ++i) tickle();
+    for (size_t i = 0; i < m_threadCount; ++i)
+    {
+        tickle();
+
+        // 注意：tickle 使用 pipe 作为唤醒机制时，多个写入事件可能被同一个 epoll_wait 线程一次性消费，导致其他本该被唤醒的线程依旧阻塞，因此 tickle 次数不严格对应唤醒线程数。stop 时需要确保所有等待 epoll 的线程最终都能重新检查 stopping 状态。
+        // TODO 这里使用睡眠机制让主线程分批次写管道，保证所有子线程都被唤醒。后续改为 eventfd()。
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
 
     // 发生在 useCaller 为 true 时，唤醒执行调度协程的线程。
     if (m_schedulerFiber) tickle();
