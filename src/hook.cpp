@@ -224,7 +224,7 @@ struct TimerInfo
  * @param fd 需要进行 IO 操作的文件描述符。
  * @param fun 原始系统调用函数指针，例如 read_f、write_f，用于在满足条件时调用真实 libc 函数。
  * @param hookFunName 当前 hook 函数名称，仅用于调试输出和错误定位。
- * @param event 需要监听的 IO 事件类型，例如 IOManager::READ 或 IOManager::WRITE。当 IO 暂时不可用时，IOManager 根据该事件等待 fd 状态变化。
+ * @param event 需要监听的 IO 事件类型，例如 IOManager::READ 或 IOManager::Event:: WRITE。当 IO 暂时不可用时，IOManager 根据该事件等待 fd 状态变化。
  * @param timeoutSo 超时选项对应的 socket 参数，例如 SO_RCVTIMEO 或 SO_SNDTIMEO，用于从 FdCtx 中获取对应 IO 超时时间。
  * @param args 传递给原始系统调用的参数。使用完美转发保持参数原始类型，支持不同 IO 函数的参数形式。
  */
@@ -424,19 +424,115 @@ extern "C"
         return fd;
     }
 
-    // TODO
-    // int connectWithTimeout(int fd, const struct sockaddr *addr, socklen_t addrlen, uint64_t timeout_ms)
-    // {
-    // }
+    // 在连接超时情况下处理非阻塞套接字连接的实现。它首先尝试使用钩子功能来捕获并管理连接请求的行为，然后使用 IOManager 和 Timer 来管理超时机制，逻辑实现和 doIo 类似。
+    // 注意：如果没有启用 hook 或者不是一个套接字、用户启用了非阻塞。都会调用 connect 系统调用，因为 connectWithTimeout 本身就在 connect 系统调用基础上实现的。
+    int connectWithTimeout(int fd, const struct sockaddr *addr, socklen_t addrlen, uint64_t timeoutMs)
+    {
+        if (!tHookEnable) return connect_f(fd, addr, addrlen);
+
+        // 获取文件描述符 fd 的上下文信息 FdCtx。
+        std::shared_ptr<FdCtx> ctx = FdMgr::GetInstance()->get(fd);
+        // 检查文件描述符上下文是否存在或是否已关闭。
+        if (!ctx || ctx->isClosed())
+        {
+            // EBADF 表示一个无效的文件描述符。
+            errno = EBADF;
+            return -1;
+        }
+        // 如果文件描述符不是一个 socket 或者用户设置了非阻塞模式，则直接调用原始的 I/O 操作函数。
+        if (!ctx->isSocket() || ctx->getUserNonblock()) return connect_f(fd, addr, addrlen);
+
+        // 第一次尝试调用非阻塞 connect。connect 有三种情况：
+        // 1. 返回 0：连接立即成功，直接返回。
+        // 2. 返回 -1 且 errno != EINPROGRESS：连接立即失败，直接返回错误。
+        // 3. 返回 -1 且 errno == EINPROGRESS：连接正在后台建立，需要通过 IOManager 等待连接完成。
+        int n = connect_f(fd, addr, addrlen);
+        // 立即成功，直接返回。
+        if (0 == n) return 0;
+        // 这里是用了下面分支的取反条件判断的，只有 EINPROGRESS 表示非阻塞连接正在进行。其他情况（例如连接被拒绝、网络不可达等）都已经得到最终结果，直接返回。
+        if (!(-1 == n && EINPROGRESS == errno)) return n;
+
+        // 非阻塞 connect 正在进行。交给 IOManager 等待 WRITE 事件。下面逻辑和 doIo() 类似。
+        IOManager *iom = IOManager::GetThis();           // 获取当前线程的 IOManager 实例。
+        std::shared_ptr<Timer> timer;                    // 声明一个定时器对象。
+        std::shared_ptr<TimerInfo> tinfo(new TimerInfo); // 创建追踪定时器是否取消的对象。
+        std::weak_ptr<TimerInfo> winfo(tinfo);           // 判断追踪定时器对象是否存在。
+
+        // 超时时间先触发和写事件先触发会导致什么问题？
+        // 1. 超时：如果是超时事件比写资源先触发，那么调度任务肯定执行到定时回调就相当于把 addevent 的写事件处理了，然后给 tinfo->cancelled 标记超时，执行完后子协程让出执行权给调度协程，调度协程从 yield 的地方继续，删除定时器，并且 tinfo->cancelled 如果有值就是非 0 的情况，就将其错误给 errno，然后退出。
+        // 2. 写事件：如果是写事件触发，会直接执行到 yield 暂停的后面，并且 cancel 会取消上面设置的定时器，所以不可能发生再次调用定时器的回调这个过程，接下来就正常往下走后正确返回就行了。
+
+        // 检查是否设置了超时时间。如果 timeoutMs 不等于 -1，则创建一个定时器。
+        if (static_cast<uint64_t>(-1) != timeoutMs)
+        {
+            // 添加一个定时器，当超时时间到达时，取消事件监听并设置 cancelled 状态。
+            timer = iom->addConditionTimer(
+                timeoutMs, [winfo, fd, iom]()
+                {
+                    auto t = winfo.lock();
+                    if (!t || t->cancelled) return;
+
+                    t->cancelled = ETIMEDOUT;
+                    // 将指定的 fd 的事件触发将事件处理。
+                    iom->cancelEvent(fd, IOManager::Event::WRITE); },
+                winfo);
+        }
+
+        // 为文件描述符 fd 添加一个写事件监听器。这样的目的是为了上面的回调函数处理指定文件描述符。
+        int res = iom->addEvent(fd, IOManager::Event::WRITE);
+        // 添加事件成功。
+        if (0 == res)
+        {
+            Fiber::GetThis()->yield();
+
+            // 如果有定时器，取消定时器。
+            if (timer) timer->cancel();
+
+            // 发生超时错误或者用户取消。
+            if (tinfo->cancelled)
+            {
+                // 赋值给 errno 通过其查看具体错误原因。
+                errno = tinfo->cancelled;
+                return -1;
+            }
+        }
+        // 添加事件失败。
+        else
+        {
+            if (timer) timer->cancel();
+
+            std::cerr << "connect addEvent(" << fd << ", WRITE) error";
+        }
+
+        // 检查连接是否建立成功。
+        int error = 0;
+        socklen_t len = sizeof(int);
+        // 通过 getsockopt() 检查套接字实际错误状态来判断是否成功或失败。
+        if (-1 == getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &len))
+        {
+            return -1;
+        }
+        // 如果没有错误，返回 0 表示连接成功。
+        if (!error)
+        {
+            return 0;
+        }
+        // 如果有错误，设置 errno 并返回错误。
+        else
+        {
+            errno = error;
+            return -1;
+        }
+    }
 
 
-    // static uint64_t sConnectTimeout = -1;
+    static uint64_t sConnectTimeout = -1;
 
 
-    // int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
-    // {
-    //     return connectWithTimeout(sockfd, addr, addrlen, sConnectTimeout);
-    // }
+    int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
+    {
+        return connectWithTimeout(sockfd, addr, addrlen, sConnectTimeout);
+    }
 
     int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
     {
