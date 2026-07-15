@@ -201,42 +201,42 @@ TEST(IOManagerTest, CancelEvent)
     close(pipefd[1]);
 }
 
-// TODO CI 中会遇到无法复现的偶然失败。
-// TEST(IOManagerTest, CancelAll)
-// {
-//     IOManager iom;
+// TODO CI 中可能会遇到无法复现的偶然失败，目前暂时无法准确定位。
+TEST(IOManagerTest, CancelAll)
+{
+    IOManager iom(2, false);
 
-//     int pipefd[2];
-//     pipe(pipefd);
+    int pipefd[2];
+    pipe(pipefd);
 
-//     std::atomic<int> count = 0;
+    std::atomic<int> count = 0;
 
-//     iom.addEvent(
-//         pipefd[0],
-//         IOManager::Event::READ,
-//         [&]()
-//         {
-//             ++count;
-//         });
+    iom.addEvent(
+        pipefd[0],
+        IOManager::Event::READ,
+        [&]()
+        {
+            ++count;
+        });
 
-//     iom.addEvent(
-//         pipefd[1],
-//         IOManager::Event::WRITE,
-//         [&]()
-//         {
-//             ++count;
-//         });
+    iom.addEvent(
+        pipefd[1],
+        IOManager::Event::WRITE,
+        [&]()
+        {
+            ++count;
+        });
 
-//     ASSERT_TRUE(iom.cancelAll(pipefd[0]));
-//     ASSERT_TRUE(iom.cancelAll(pipefd[1]));
+    ASSERT_TRUE(iom.cancelAll(pipefd[0]));
+    ASSERT_TRUE(iom.cancelAll(pipefd[1]));
 
-//     std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::this_thread::sleep_for(std::chrono::seconds(2));
 
-//     ASSERT_EQ(count, 2);
+    ASSERT_EQ(count, 2);
 
-//     close(pipefd[0]);
-//     close(pipefd[1]);
-// }
+    close(pipefd[0]);
+    close(pipefd[1]);
+}
 
 TEST(IOManagerTest, MultiThread)
 {

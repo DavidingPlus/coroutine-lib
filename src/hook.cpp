@@ -410,7 +410,8 @@ extern "C"
 
         // 如果钩子启用了，则通过调用原始的 socket 函数创建套接字，并将返回的文件描述符存储在 fd 变量中。
         int fd = socket_f(domain, type, protocol);
-        if (-1 == fd) // fd是无效的情况
+        // fd 是无效的情况。
+        if (-1 == fd)
         {
             std::cerr << "socket() failed:" << strerror(errno) << '\n';
             return fd;

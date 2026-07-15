@@ -32,6 +32,8 @@ TEST(HookTest, HookEnableDefault)
 
 TEST(HookTest, HookEnableOpen)
 {
+    // 这里只验证“accept 成功后，新返回的 client fd 会被 hook 注册进 FdMgr”。不验证 accept 的等待/挂起路径，因为当前这套 hook 的前提是：可能阻塞的 hook IO 必须运行在 IOManager 调度的协程里，而不能直接跑在测试主线程上。
+    // 一个典型的错误写法（例 RegisterAcceptedFd）是：主线程 setHookEnable(true) 后直接调用 accept()。当监听队列里还没有连接时，accept 会先返回 EAGAIN，随后 hook 会先 addEvent，再调用 Fiber::yield() 试图挂起当前执行流。但主线程此时并不在 IOManager::run() 的调度协程上下文里，yield() 不会真正挂起到事件循环等待 epoll，而是马上回到主线程主协程，导致代码继续 retry。retry 后又会重复对 listenFd 注册 READ 事件，最终表现为 addEvent 失败。
     setHookEnable(true);
 
     EXPECT_TRUE(isHookEnable());
@@ -427,67 +429,99 @@ TEST(HookIOTest, ReadvWaitEvent)
     EXPECT_EQ(close(fd[1]), 0);
 }
 
-// TODO
-// TEST(AcceptHookTest, RegisterAcceptedFd)
-// {
-//     setHookEnable(true);
+TEST(AcceptHookTest, RegisterAcceptedFd)
+{
+    setHookEnable(true);
 
-//     IOManager iom(1, false);
+    IOManager iom(1, false);
 
-//     // 创建监听 socket。
-//     int listenFd = socket(AF_INET, SOCK_STREAM, 0);
-//     ASSERT_GE(listenFd, 0);
+    // 创建监听 socket。
+    int listenFd = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(listenFd, 0);
 
-//     sockaddr_in addr{};
-//     addr.sin_family = AF_INET;
-//     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-//     addr.sin_port = htons(1234);
+    // 设置端口复用。
+    int reuse = 1;
+    setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
-//     ASSERT_EQ(bind(listenFd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)), 0) << strerror(errno);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(0); // 随机端口。
 
-//     ASSERT_EQ(listen(listenFd, 5), 0) << strerror(errno);
+    ASSERT_EQ(bind(listenFd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)), 0) << strerror(errno);
 
-//     socklen_t len = sizeof(addr);
-//     ASSERT_EQ(getsockname(listenFd, reinterpret_cast<sockaddr *>(&addr), &len), 0) << strerror(errno);
-//     std::cout << "Listen Port = " << ntohs(addr.sin_port) << std::endl;
+    ASSERT_EQ(listen(listenFd, 5), 0) << strerror(errno);
 
-//     // 客户端线程。
-//     std::thread client([&]()
-//                        {
-//                            int fd = socket(AF_INET, SOCK_STREAM, 0);
-//                            ASSERT_GE(fd, 0);
+    socklen_t len = sizeof(addr);
+    ASSERT_EQ(getsockname(listenFd, reinterpret_cast<sockaddr *>(&addr), &len), 0) << strerror(errno);
+    std::cout << "Listen Port = " << ntohs(addr.sin_port) << std::endl;
 
-//                            int res = connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr));
+    std::atomic<bool> finished = false;
+    int acceptedFd = -1;
+    std::shared_ptr<FdCtx> acceptedCtx;
 
-//                            ASSERT_EQ(res, 0) << strerror(errno);
+    // 客户端线程。
+    std::thread client([&]()
+                       {
+                           int fd = socket(AF_INET, SOCK_STREAM, 0);
+                           ASSERT_GE(fd, 0);
 
-//                            EXPECT_EQ(close(fd), 0); //
-//                        });
+                           int res = connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr));
 
-//     std::cout << "Waiting accept..." << std::endl;
+                           ASSERT_EQ(res, 0) << strerror(errno);
 
-//     sockaddr_in clientAddr{};
-//     len = sizeof(clientAddr);
-//     int clientFd = accept(listenFd, reinterpret_cast<sockaddr *>(&clientAddr), &len);
+                           EXPECT_EQ(close(fd), 0); //
+                       });
 
-//     ASSERT_GE(clientFd, 0) << strerror(errno);
+    std::cout << "Waiting accept..." << std::endl;
 
-//     std::cout << "Accept fd = " << clientFd << std::endl;
+    // 主线程这里使用 sleep_for 只是为了协调测试时序。如果主线程保持 hook 打开，底层可能走到被 hook 的 nanosleep/sleep 路径，注册定时器事件以后就 yield() 让出调度权了，显然会遇到很多不可预期的问题，所以临时关闭主线程 hook。
+    setHookEnable(false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    setHookEnable(true);
 
-//     auto ctx = FdMgr::GetInstance()->get(clientFd);
+    iom.scheduleLock([&]()
+                     {
+                         // 阻塞型 hook IO 必须在 IOManager 调度到的协程里执行，原因和 hook 的实现方式直接相关：
+                         //
+                         // 1. accept/read/write 这类 hook 在首次遇到 EAGAIN 时，不会阻塞线程，而是先把 fd 的 READ/WRITE 事件注册到 IOManager；再调用当前 Fiber::yield() 主动让出执行权；等 epoll_wait 检测到事件就绪后，再由 IOManager 把这个 Fiber 重新调度回来。
+                         //
+                         // 2. 这条链路成立的前提是：当前执行流本身就是一个“被 IOManager 调度的工作协程”。只有这种协程 yield 之后，控制权才会正确回到 Scheduler/IOManager 的调度循环，后者才能继续跑 epoll_wait，等事件触发后再恢复这个协程。
+                         //
+                         // 3. 之前错误的写法是在测试主线程里直接调用 accept()。主线程虽然 setHookEnable(true) 了，但它并没有运行在 IOManager::run() 调度出来的工作协程里，因此 accept hook 里的 yield 并不会把执行权交回真正的 IO 调度循环。结果是：accept 第一次因为还没有连接而返回 EAGAIN；hook 给 listenFd 注册 READ 事件；但 yield 后没有正确“挂起等待事件”，而是很快又回到当前执行路径；随后的 retry 会再次对同一个 listenFd addEvent；最终因为重复注册同一 READ 事件而失败。
+                         //
+                         // 4. 所以这个用例必须把 accept 放进 scheduleLock() 调度的协程里执行，才能满足 hook 的运行前提，保证“注册事件 -> 挂起 -> 事件触发 -> 恢复协程”这条路径在语义上是成立的。
+                         setHookEnable(true);
 
-//     ASSERT_NE(ctx, nullptr);
+                         sockaddr_in clientAddr{};
+                         socklen_t clientLen = sizeof(clientAddr);
 
-//     EXPECT_TRUE(ctx->isSocket());
-//     EXPECT_FALSE(ctx->isClosed());
+                         acceptedFd = accept(listenFd, reinterpret_cast<sockaddr *>(&clientAddr), &clientLen);
+                         if (acceptedFd >= 0) acceptedCtx = FdMgr::GetInstance()->get(acceptedFd);
 
-//     EXPECT_EQ(close(clientFd), 0);
-//     EXPECT_EQ(close(listenFd), 0);
+                         finished = true;
 
-//     client.join();
+                         setHookEnable(false); //
+                     });
 
-//     setHookEnable(false);
-// }
+    client.join();
+
+    setHookEnable(false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    setHookEnable(true);
+
+    ASSERT_TRUE(finished);
+    ASSERT_GE(acceptedFd, 0) << strerror(errno);
+    ASSERT_NE(acceptedCtx, nullptr);
+
+    EXPECT_TRUE(acceptedCtx->isSocket());
+    EXPECT_FALSE(acceptedCtx->isClosed());
+
+    EXPECT_EQ(close(acceptedFd), 0);
+    EXPECT_EQ(close(listenFd), 0);
+
+    setHookEnable(false);
+}
 
 TEST(SleepHookTest, FiberSchedule)
 {
