@@ -365,13 +365,31 @@ TEST(HookIOTest, ReadvBasic)
                   {
                       char a[8]{};
                       char b[8]{};
+                      size_t total = 0;
 
-                      iovec iov[] = {
-                          {a, 5},
-                          {b, 2}};
+                      while (total < 7)
+                      {
+                          iovec iov[2];
+                          int iovcnt = 0;
 
-                      EXPECT_EQ(readv(fd[0], iov, 2), 7); //
-                  });
+                          if (total < 5)
+                          {
+                              iov[iovcnt++] = {a + total, 5 - total};
+                              iov[iovcnt++] = {b, 2};
+                          }
+                          else
+                          {
+                              iov[iovcnt++] = {b + (total - 5), 7 - total};
+                          }
+
+                          ssize_t n = readv(fd[0], iov, iovcnt);
+                          ASSERT_GT(n, 0);
+
+                          total += static_cast<size_t>(n);
+                      }
+
+                      EXPECT_STREQ(a, "hello");
+                      EXPECT_STREQ(b, "!!"); });
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -395,12 +413,30 @@ TEST(HookIOTest, ReadvWaitEvent)
 
                          char a[8] = {};
                          char b[8] = {};
+                         size_t total = 0;
 
-                         iovec iov[2] = {
-                             {a, 5},
-                             {b, 2}};
+                         // readv 对 pipe/socket 只保证“读取当前可用的数据”，并不保证一次把两个 iovec
+                         // 全部填满。因此这里循环读取到 7 字节为止，避免把部分读取的合法行为误判成失败。
+                         while (total < 7)
+                         {
+                             iovec iov[2];
+                             int iovcnt = 0;
 
-                         EXPECT_EQ(readv(fd[0], iov, 2), 7);
+                             if (total < 5)
+                             {
+                                 iov[iovcnt++] = {a + total, 5 - total};
+                                 iov[iovcnt++] = {b, 2};
+                             }
+                             else
+                             {
+                                 iov[iovcnt++] = {b + (total - 5), 7 - total};
+                             }
+
+                             ssize_t n = readv(fd[0], iov, iovcnt);
+                             ASSERT_GT(n, 0);
+
+                             total += static_cast<size_t>(n);
+                         }
 
                          EXPECT_STREQ(a, "hello");
                          EXPECT_STREQ(b, "!!");
