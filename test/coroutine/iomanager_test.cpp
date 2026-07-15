@@ -201,37 +201,48 @@ TEST(IOManagerTest, CancelEvent)
     close(pipefd[1]);
 }
 
-// TODO CI 中可能会遇到无法复现的偶然失败，目前暂时无法准确定位。
 TEST(IOManagerTest, CancelAll)
 {
-    IOManager iom(2, false);
+    // cancelAll 测试需要避免事件循环线程和测试线程之间的时序竞争。pipe 写端通常一直处于可写状态，如果注册 WRITE 事件后立即在主线程调用 cancelAll，IOManager 线程可能提前收到 EPOLLOUT 并执行回调，导致事件已经被移除，使 cancelAll 返回 false。因此这里将 addEvent 和 cancelAll 放入同一个调度任务中串行执行，确保测试验证的是 cancelAll 的取消并触发回调语义，而不是线程调度顺序。
+    IOManager iom(1, false);
 
     int pipefd[2];
     pipe(pipefd);
 
     std::atomic<int> count = 0;
+    std::atomic<bool> finished = false;
 
-    iom.addEvent(
-        pipefd[0],
-        IOManager::Event::READ,
-        [&]()
-        {
-            ++count;
-        });
+    iom.scheduleLock([&]()
+                     {
+                         ASSERT_EQ(
+                             iom.addEvent(
+                                 pipefd[0],
+                                 IOManager::Event::READ,
+                                 [&]()
+                                 {
+                                     ++count;
+                                 }),
+                             0);
 
-    iom.addEvent(
-        pipefd[1],
-        IOManager::Event::WRITE,
-        [&]()
-        {
-            ++count;
-        });
+                         ASSERT_EQ(
+                             iom.addEvent(
+                                 pipefd[1],
+                                 IOManager::Event::WRITE,
+                                 [&]()
+                                 {
+                                     ++count;
+                                 }),
+                             0);
 
-    ASSERT_TRUE(iom.cancelAll(pipefd[0]));
-    ASSERT_TRUE(iom.cancelAll(pipefd[1]));
+                         ASSERT_TRUE(iom.cancelAll(pipefd[0]));
+                         ASSERT_TRUE(iom.cancelAll(pipefd[1]));
 
-    std::this_thread::sleep_for(std::chrono::seconds(2));
+                         finished = true; //
+                     });
 
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    ASSERT_TRUE(finished);
     ASSERT_EQ(count, 2);
 
     close(pipefd[0]);

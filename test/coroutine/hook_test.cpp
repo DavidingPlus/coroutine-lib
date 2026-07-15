@@ -523,64 +523,94 @@ TEST(AcceptHookTest, RegisterAcceptedFd)
     setHookEnable(false);
 }
 
-TEST(SleepHookTest, FiberSchedule)
+TEST(SleepHookTest, SingleWorkerWithoutHookBlocksFollowingTask)
 {
-    setHookEnable(true);
+    // 只给一个 worker，确保两个任务一定串行竞争同一条执行线程。这个用例验证“不启用 hook 时，sleep 会直接阻塞 worker 线程”，因此后面的任务在第一个任务 sleep 返回前连开始执行的机会都拿不到。
+    IOManager iom(1, false);
 
-    IOManager iom(2, false);
-    std::vector<int> order;
+    std::atomic<bool> firstStarted = false;
+    std::atomic<bool> firstCompleted = false;
+    std::atomic<bool> secondStarted = false;
+    std::atomic<bool> secondCompleted = false;
 
     iom.scheduleLock([&]()
                      {
-                         order.push_back(1);
+                         firstStarted = true;
 
                          sleep(1);
 
-                         order.push_back(3); //
+                         firstCompleted = true; //
                      });
 
     iom.scheduleLock([&]()
                      {
-                         order.push_back(2); //
+                         secondStarted = true;
+
+                         sleep(1);
+
+                         secondCompleted = true; //
                      });
 
-    // 主线程不启用 hook。
-    setHookEnable(false);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    setHookEnable(true);
 
-    ASSERT_EQ(order.size(), 2);
-    EXPECT_EQ(order[0], 1);
-    EXPECT_EQ(order[1], 2);
+    ASSERT_TRUE(firstStarted);
+    ASSERT_FALSE(firstCompleted);
+    ASSERT_FALSE(secondStarted);
+    ASSERT_FALSE(secondCompleted);
 
-    setHookEnable(false);
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    setHookEnable(true);
+    // 大约 1 秒后，第一个任务会完成，但第二个任务此时才刚拿到运行机会。
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
-    ASSERT_EQ(order.size(), 3);
-    EXPECT_EQ(order[2], 3);
-
-    setHookEnable(false);
+    ASSERT_TRUE(firstCompleted);
+    ASSERT_TRUE(secondStarted);
+    ASSERT_FALSE(secondCompleted);
 }
 
-TEST(SleepHookTest, ParallelSleep)
+TEST(SleepHookTest, SingleWorkerWithHookYieldsFollowingTask)
 {
-    setHookEnable(true);
+    // 仍然只给一个 worker，但在 worker 协程里启用 hook。此时 sleep 不再阻塞线程，而是“注册定时器 + 当前 Fiber yield”，这样同一个 worker 就能继续调度后续任务执行。对比上一个用例，这里第二个任务会很快拿到执行机会。
+    IOManager iom(1, false);
 
-    IOManager iom(2, false);
+    std::atomic<bool> firstStarted = false;
+    std::atomic<bool> firstCompleted = false;
+    std::atomic<bool> secondStarted = false;
+    std::atomic<bool> secondCompleted = false;
 
-    auto begin = getCurrentMs();
+    iom.scheduleLock([&]()
+                     {
+                         firstStarted = true;
 
-    iom.scheduleLock([]()
-                     { sleep(1); });
-    iom.scheduleLock([]()
-                     { sleep(1); });
+                         setHookEnable(true);
+                         sleep(1);
+                         setHookEnable(false);
 
-    auto cost = getCurrentMs() - begin;
+                         firstCompleted = true; //
+                     });
 
-    EXPECT_LT(cost, 1500);
+    iom.scheduleLock([&]()
+                     {
+                         secondStarted = true;
 
-    setHookEnable(false);
+                         setHookEnable(true);
+                         sleep(1);
+                         setHookEnable(false);
+
+                         secondCompleted = true; //
+                     });
+
+    // 主线程不启用 hook，避免 sleep_for 误走 hook 的 nanosleep 路径。
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    ASSERT_TRUE(firstStarted);
+    ASSERT_FALSE(firstCompleted);
+    ASSERT_TRUE(secondStarted);
+    ASSERT_FALSE(secondCompleted);
+
+    // 两个任务都会在各自 sleep(1) 到期后被重新调度回来，因此这一轮等待后应当都已完成。
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+    ASSERT_TRUE(firstCompleted);
+    ASSERT_TRUE(secondCompleted);
 }
 
 TEST(UsleepHookTest, Precision)
