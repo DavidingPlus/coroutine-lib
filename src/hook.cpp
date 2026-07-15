@@ -633,6 +633,8 @@ extern "C"
                 int arg = va_arg(va, int);
                 va_end(va);
 
+                if (!tHookEnable) return fcntl_f(fd, cmd, arg);
+
                 std::shared_ptr<FdCtx> ctx = FdMgr::GetInstance()->get(fd);
                 // 如果 ctx 无效，或者文件描述符关闭不是一个套接字就调用原始调用。
                 if (!ctx || ctx->isClosed() || !ctx->isSocket()) return fcntl_f(fd, cmd, arg);
@@ -660,6 +662,8 @@ extern "C"
 
                 // 调用原始的 fcntl 函数获取文件描述符的当前状态标志。
                 int arg = fcntl_f(fd, cmd);
+
+                if (!tHookEnable) return arg;
 
                 std::shared_ptr<FdCtx> ctx = FdMgr::GetInstance()->get(fd);
                 // 如果上下文无效、文件描述符已关闭或不是套接字，则直接返回状态标志。
@@ -754,6 +758,8 @@ extern "C"
         // 特殊处理：设置非阻塞模式的命令。
         if (FIONBIO == request)
         {
+            if (!tHookEnable) return ioctl_f(fd, request, arg);
+
             int flag = *(int *)arg;
             bool userNonblock = (0 != flag);
 

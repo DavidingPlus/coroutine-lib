@@ -16,6 +16,26 @@ bool isHookEnable();
 void setHookEnable(bool flag);
 
 
+// 使用 RAII 方式临时切换当前线程的 hook 开关。主要用于协程库内部需要绕过 hook、直接调用原始 syscall 的场景：
+// 1. FdCtx 初始化 socket 时，需要直接操作底层 fcntl，避免在 FdManager 尚未完成发布时又重入到 hook/fd 管理逻辑。
+// 2. IOManager/Scheduler 内部用于唤醒、idle、析构的 pipe/read/write/sleep 等基础操作，不应该再走协程化 hook，否则可能把框架自身再次卷入调度流程。
+// 由于 hook 开关是 thread_local 状态，直接 setHookEnable(false) 很容易在提前 return、异常或较深调用链中漏掉恢复，导致当前线程后续逻辑继续以“hook 关闭”状态运行。因此这里保存进入作用域前的旧状态，并在离开作用域时自动恢复，保证“内部临时关闭 hook”不会泄漏到外部业务代码。类似于 std::lock_guard 的使用方法。
+class HookEnableGuard
+{
+
+public:
+
+    explicit HookEnableGuard(bool flag) : m_oldFlag(isHookEnable()) { setHookEnable(flag); }
+
+    virtual ~HookEnableGuard() { setHookEnable(m_oldFlag); }
+
+
+private:
+
+    bool m_oldFlag;
+};
+
+
 // extern "C" 确保正确调用 C 库中的系统调用，C++ 编译器不会对这些函数名进行修饰。
 // 下面的代码是一个用于网络钩子（hook）的功能，旨在拦截并重定向某些系统调用，如与网络相关的 socket、connect、read、write 等函数。这种技术通常用于网络库、异步 I/O 操作或协程库中，以便对底层系统调用进行自定义处理，从而实现非阻塞 I/O、超时控制或其他功能。
 extern "C" // 确保正确调用c库中的系统调用，c++编译器不会对这些函数名进行修饰。

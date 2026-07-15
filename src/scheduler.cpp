@@ -1,5 +1,6 @@
 #include "scheduler.h"
 
+#include "hook.h"
 #include "config.h"
 
 #include <cassert>
@@ -120,9 +121,12 @@ void Scheduler::stop()
     {
         tickle();
 
-        // 注意：tickle 使用 pipe 作为唤醒机制时，多个写入事件可能被同一个 epoll_wait 线程一次性消费，导致其他本该被唤醒的线程依旧阻塞，因此 tickle 次数不严格对应唤醒线程数。stop 时需要确保所有等待 epoll 的线程最终都能重新检查 stopping 状态。
-        // TODO 这里使用睡眠机制让主线程分批次写管道，保证所有子线程都被唤醒。后续改为 eventfd()。
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        {
+            // 注意：tickle 使用 pipe 作为唤醒机制时，多个写入事件可能被同一个 epoll_wait 线程一次性消费，导致其他本该被唤醒的线程依旧阻塞，因此 tickle 次数不严格对应唤醒线程数。stop 时需要确保所有等待 epoll 的线程最终都能重新检查 stopping 状态。
+            // TODO 这里使用睡眠机制让主线程分批次写管道，保证所有子线程都被唤醒。后续改为 eventfd()。
+            HookEnableGuard guard(false);
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
     }
 
     // 发生在 useCaller 为 true 时，唤醒执行调度协程的线程。
@@ -261,8 +265,11 @@ void Scheduler::idle()
     {
         if (COROUTINE_CONFIG_DEBUG) std::cout << "Scheduler::idle(), sleeping in thread: " << Thread::GetThreadId() << std::endl;
 
-        // 降低空闲协程在无任务时对 cpu 占用率，避免空转浪费资源。
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        {
+            // 降低空闲协程在无任务时对 cpu 占用率，避免空转浪费资源。
+            HookEnableGuard guard(false);
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
 
         Fiber::GetThis()->yield();
     }

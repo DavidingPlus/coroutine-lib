@@ -1,5 +1,7 @@
 #include "fdmanager.h"
 
+#include "hook.h"
+
 #include <sys/stat.h>
 #include <fcntl.h>
 
@@ -37,9 +39,13 @@ bool FdCtx::init()
     // 如果是一个套接字，设置为非阻塞。
     if (m_isSocket)
     {
-        // 获取文件描述符的状态，检查当前标志中是否已经设置了非阻塞标志，如果没有则设置。
-        int flags = fcntl(m_fd, F_GETFL, 0);
-        if (!(flags & O_NONBLOCK)) fcntl(m_fd, F_SETFL, flags | O_NONBLOCK);
+        {
+            HookEnableGuard guard(false);
+
+            // 获取文件描述符的状态，检查当前标志中是否已经设置了非阻塞标志，如果没有则设置。
+            int flags = fcntl(m_fd, F_GETFL, 0);
+            if (!(flags & O_NONBLOCK)) fcntl(m_fd, F_SETFL, flags | O_NONBLOCK);
+        }
 
         // 标记由框架（Hook）将 fd 设置为了非阻塞模式。
         m_sysNonblock = true;

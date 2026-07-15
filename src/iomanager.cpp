@@ -1,5 +1,6 @@
 #include "iomanager.h"
 
+#include "hook.h"
 #include "config.h"
 
 #include <cassert>
@@ -123,7 +124,10 @@ IOManager::IOManager(size_t threads, bool useCaller, const std::string &name)
     //      O_ASYNC：启用异步 IO 信号通知。
 
     // 修改管道文件描述符以非阻塞的方式，配合边缘触发。
-    res = fcntl(m_tickleFds[0], F_SETFL, fcntl(m_tickleFds[0], F_GETFL) | O_NONBLOCK);
+    {
+        HookEnableGuard guard(false);
+        res = fcntl(m_tickleFds[0], F_SETFL, fcntl(m_tickleFds[0], F_GETFL) | O_NONBLOCK);
+    }
     assert(!res);
 
     // 将 m_tickleFds[0] 作为读事件放入到 event 监听集合中。
@@ -142,12 +146,16 @@ IOManager::~IOManager()
     // 关闭 Scheduler 类中的线程池，让任务全部执行完后线程安全退出。
     stop();
 
-    // 关闭 epoll 的句柄。
-    close(m_epfd);
+    {
+        HookEnableGuard guard(false);
 
-    // 关闭管道读端写端。
-    close(m_tickleFds[0]);
-    close(m_tickleFds[1]);
+        // 关闭 epoll 的句柄。
+        close(m_epfd);
+
+        // 关闭管道读端写端。
+        close(m_tickleFds[0]);
+        close(m_tickleFds[1]);
+    }
 
     // 将 fdcontext 文件描述符一个个关闭。
     for (size_t i = 0; i < m_fdContexts.size(); ++i)
@@ -404,8 +412,11 @@ void IOManager::tickle()
     if (!hasIdleThreads()) return;
 
     // 如果有空闲线程，函数会向管道 m_tickleFds[1] 写入一个字符 "T"。这个写操作的目的是向等待在 m_tickleFds[0]（管道的另一端）的线程发送一个信号，通知它有新任务可以处理了。
-    int res = write(m_tickleFds[1], "T", 1);
-    assert(1 == res);
+    {
+        HookEnableGuard guard(false);
+        int res = write(m_tickleFds[1], "T", 1);
+        assert(1 == res);
+    }
 }
 
 bool IOManager::stopping()
@@ -486,8 +497,11 @@ void IOManager::idle()
             {
                 uint8_t dummy[256];
                 // 清空管道中的所有唤醒数据。由于 epoll 使用 EPOLLET 边缘触发模式，必须读取到管道为空，否则剩余数据不会再次触发 epoll 事件。
-                while (read(m_tickleFds[0], dummy, sizeof(dummy)) > 0)
-                    ;
+                {
+                    HookEnableGuard guard(false);
+                    while (read(m_tickleFds[0], dummy, sizeof(dummy)) > 0)
+                        ;
+                }
 
                 // 继续处理其他 IO 事件。
                 continue;

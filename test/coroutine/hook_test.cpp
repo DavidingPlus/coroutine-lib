@@ -20,6 +20,11 @@ static uint64_t getCurrentMs()
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+static int getRawFdFlags(int fd)
+{
+    return fcntl_f(fd, F_GETFL, 0);
+}
+
 
 TEST(HookTest, HookEnableDefault)
 {
@@ -755,6 +760,121 @@ TEST(NanoSleepHookTest, Basic)
     EXPECT_LT(cost, 2000);
 }
 
+TEST(FcntlHookTest, SocketGetflHidesFrameworkNonblock)
+{
+    setHookEnable(true);
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(fd, 0);
+
+    auto ctx = FdMgr::GetInstance()->get(fd);
+    ASSERT_NE(ctx, nullptr);
+    EXPECT_TRUE(ctx->getSysNonblock());
+    EXPECT_FALSE(ctx->getUserNonblock());
+
+    int rawFlags = getRawFdFlags(fd);
+    ASSERT_NE(rawFlags, -1) << strerror(errno);
+    EXPECT_TRUE(rawFlags & O_NONBLOCK);
+
+    int visibleFlags = fcntl(fd, F_GETFL, 0);
+    ASSERT_NE(visibleFlags, -1) << strerror(errno);
+    EXPECT_FALSE(visibleFlags & O_NONBLOCK);
+
+    EXPECT_EQ(close(fd), 0);
+
+    setHookEnable(false);
+}
+
+TEST(FcntlHookTest, SocketSetflTracksUserNonblockAndKeepsKernelNonblock)
+{
+    setHookEnable(true);
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(fd, 0);
+
+    auto ctx = FdMgr::GetInstance()->get(fd);
+    ASSERT_NE(ctx, nullptr);
+
+    int visibleFlags = fcntl(fd, F_GETFL, 0);
+    ASSERT_NE(visibleFlags, -1) << strerror(errno);
+    EXPECT_FALSE(visibleFlags & O_NONBLOCK);
+
+    ASSERT_EQ(fcntl(fd, F_SETFL, visibleFlags | O_NONBLOCK), 0) << strerror(errno);
+    EXPECT_TRUE(ctx->getUserNonblock());
+    EXPECT_TRUE(fcntl(fd, F_GETFL, 0) & O_NONBLOCK);
+    EXPECT_TRUE(getRawFdFlags(fd) & O_NONBLOCK);
+
+    visibleFlags = fcntl(fd, F_GETFL, 0);
+    ASSERT_NE(visibleFlags, -1) << strerror(errno);
+    ASSERT_EQ(fcntl(fd, F_SETFL, visibleFlags & ~O_NONBLOCK), 0) << strerror(errno);
+    EXPECT_FALSE(ctx->getUserNonblock());
+    EXPECT_FALSE(fcntl(fd, F_GETFL, 0) & O_NONBLOCK);
+    EXPECT_TRUE(getRawFdFlags(fd) & O_NONBLOCK);
+
+    EXPECT_EQ(close(fd), 0);
+
+    setHookEnable(false);
+}
+
+TEST(FcntlHookTest, NonSocketSetflFallsBackToSyscall)
+{
+    setHookEnable(true);
+
+    int fd[2];
+    ASSERT_EQ(pipe(fd), 0);
+    EXPECT_EQ(FdMgr::GetInstance()->get(fd[0]), nullptr);
+
+    int initialFlags = fcntl(fd[0], F_GETFL, 0);
+    ASSERT_NE(initialFlags, -1) << strerror(errno);
+    EXPECT_EQ(initialFlags, getRawFdFlags(fd[0]));
+
+    ASSERT_EQ(fcntl(fd[0], F_SETFL, initialFlags | O_NONBLOCK), 0) << strerror(errno);
+    EXPECT_TRUE(fcntl(fd[0], F_GETFL, 0) & O_NONBLOCK);
+    EXPECT_TRUE(getRawFdFlags(fd[0]) & O_NONBLOCK);
+
+    ASSERT_EQ(fcntl(fd[0], F_SETFL, initialFlags & ~O_NONBLOCK), 0) << strerror(errno);
+    EXPECT_FALSE(fcntl(fd[0], F_GETFL, 0) & O_NONBLOCK);
+    EXPECT_FALSE(getRawFdFlags(fd[0]) & O_NONBLOCK);
+
+    EXPECT_EQ(close(fd[0]), 0);
+    EXPECT_EQ(close(fd[1]), 0);
+
+    setHookEnable(false);
+}
+
+TEST(FcntlHookTest, OtherCommandsPassThrough)
+{
+    setHookEnable(true);
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(fd, 0);
+
+    ASSERT_EQ(fcntl(fd, F_SETFD, FD_CLOEXEC), 0) << strerror(errno);
+
+    int flags = fcntl(fd, F_GETFD, 0);
+    ASSERT_NE(flags, -1) << strerror(errno);
+    EXPECT_TRUE(flags & FD_CLOEXEC);
+
+    EXPECT_EQ(close(fd), 0);
+
+    setHookEnable(false);
+}
+
+TEST(FcntlHookTest, InvalidFdFallsBackToSyscall)
+{
+    setHookEnable(true);
+
+    errno = 0;
+    EXPECT_EQ(fcntl(-1, F_GETFL, 0), -1);
+    EXPECT_EQ(errno, EBADF);
+
+    errno = 0;
+    EXPECT_EQ(fcntl(-1, F_SETFL, O_NONBLOCK), -1);
+    EXPECT_EQ(errno, EBADF);
+
+    setHookEnable(false);
+}
+
 TEST(IoctlHookTest, SocketFionbioSyncsUserNonblock)
 {
     setHookEnable(true);
@@ -772,11 +892,13 @@ TEST(IoctlHookTest, SocketFionbioSyncsUserNonblock)
     ASSERT_EQ(ioctl(fd, FIONBIO, &flag), 0) << strerror(errno);
     EXPECT_TRUE(ctx->getUserNonblock());
     EXPECT_TRUE(fcntl(fd, F_GETFL, 0) & O_NONBLOCK);
+    EXPECT_TRUE(getRawFdFlags(fd) & O_NONBLOCK);
 
     flag = 0;
     ASSERT_EQ(ioctl(fd, FIONBIO, &flag), 0) << strerror(errno);
     EXPECT_FALSE(ctx->getUserNonblock());
-    EXPECT_TRUE(fcntl(fd, F_GETFL, 0) & O_NONBLOCK);
+    EXPECT_FALSE(fcntl(fd, F_GETFL, 0) & O_NONBLOCK);
+    EXPECT_TRUE(getRawFdFlags(fd) & O_NONBLOCK);
 
     EXPECT_EQ(close(fd), 0);
 
