@@ -7,6 +7,7 @@
 
 #include <iostream>
 #include <cstring>
+#include <cstdarg>
 
 #include <dlfcn.h>
 
@@ -619,9 +620,34 @@ extern "C"
     // {
     // }
 
-    // int ioctl(int fd, unsigned long request, ...)
-    // {
-    // }
+    int ioctl(int fd, unsigned long request, ...)
+    {
+        // va_list 类型持有处理可变参数的状态信息。
+        va_list va;
+        // 初始化 va 让它指向可变参数的第一个参数位置。
+        va_start(va, request);
+        // 将 va 的指向参数的以 void* 类型取出存放到 arg 中。
+        void *arg = va_arg(va, void *);
+        // 用于结束对 va_list 变量的操作。清理 va 占用的资源。
+        va_end(va);
+
+        // 特殊处理：设置非阻塞模式的命令。
+        if (FIONBIO == request)
+        {
+            int flag = *(int *)arg;
+            bool userNonblock = (0 != flag);
+
+            std::shared_ptr<FdCtx> ctx = FdMgr::GetInstance()->get(fd);
+            // 检查获取的上下文对象是否有效（即 ctx 是否为空）。如果上下文对象无效、文件描述符已关闭或不是一个套接字，则直接调用原始的 ioctl 函数，返回处理结果。
+            if (!ctx || ctx->isClosed() || !ctx->isSocket()) return ioctl_f(fd, request, arg);
+
+            // 如果上下文对象有效，调用其 setUserNonblock 方法，将非阻塞模式设置为 userNonblock 指定的值。这将更新文件描述符的非阻塞状态。
+            ctx->setUserNonblock(userNonblock);
+        }
+
+
+        return ioctl_f(fd, request, arg);
+    }
 
     // 一个用于获取套接字选项值的函数。它允许你检查指定套接字的某些选项的当前设置。
     int getsockopt(int sockfd, int level, int optname, void *optval, socklen_t *optlen)
