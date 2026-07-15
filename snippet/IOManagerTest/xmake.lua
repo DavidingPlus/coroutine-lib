@@ -1,5 +1,11 @@
-target("IOManagerTest")
+target("IOManagerTest1")
     set_kind("binary")
-    add_files("main.cpp")
+    add_files("main1.cpp")
+    add_deps("coroutine")
+target_end()
+
+target("IOManagerTest2")
+    set_kind("binary")
+    add_files("main2.cpp")
     add_deps("coroutine")
 target_end()
