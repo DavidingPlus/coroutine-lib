@@ -617,10 +617,128 @@ extern "C"
         return close_f(fd);
     }
 
-    // TODO
-    // int fcntl(int fd, int cmd, ... /* arg */)
-    // {
-    // }
+    int fcntl(int fd, int cmd, ... /* arg */)
+    {
+        // va_list 类型持有处理可变参数的状态信息。
+        va_list va;
+        // 使其指向第一个可变参数（在 cmd 之后的参数）。
+        va_start(va, cmd);
+
+        switch (cmd)
+        {
+            // 用于设置文件描述符的状态标志（例如，设置非阻塞模式）。
+            case F_SETFL:
+            {
+                // 获得下一个 int 类型的参数。
+                int arg = va_arg(va, int);
+                va_end(va);
+
+                std::shared_ptr<FdCtx> ctx = FdMgr::GetInstance()->get(fd);
+                // 如果 ctx 无效，或者文件描述符关闭不是一个套接字就调用原始调用。
+                if (!ctx || ctx->isClosed() || !ctx->isSocket()) return fcntl_f(fd, cmd, arg);
+
+                // 和下面 ioctl() 思路一致，Hook 的前提是 socket 始终保持内核 nonblock。用户语义设置阻塞不代表框架可以把底层 nonblock 去掉，实际传给内核的标志需要保留框架自己的 nonblock 状态。
+
+                // 用户是否设定了非阻塞。
+                ctx->setUserNonblock(arg & O_NONBLOCK);
+                // 最后是否阻塞根据系统设置决定。
+                if (ctx->getSysNonblock())
+                {
+                    arg |= O_NONBLOCK;
+                }
+                else
+                {
+                    arg &= ~O_NONBLOCK;
+                }
+                return fcntl_f(fd, cmd, arg);
+            }
+            break;
+
+            case F_GETFL:
+            {
+                va_end(va);
+
+                // 调用原始的 fcntl 函数获取文件描述符的当前状态标志。
+                int arg = fcntl_f(fd, cmd);
+
+                std::shared_ptr<FdCtx> ctx = FdMgr::GetInstance()->get(fd);
+                // 如果上下文无效、文件描述符已关闭或不是套接字，则直接返回状态标志。
+                if (!ctx || ctx->isClosed() || !ctx->isSocket()) return arg;
+
+                // 同理，这里是呈现给用户显示的为用户设定的值，但是底层设置还是根据系统设置决定的。
+                if (ctx->getUserNonblock())
+                {
+                    return arg | O_NONBLOCK;
+                }
+                else
+                {
+                    return arg & ~O_NONBLOCK;
+                }
+            }
+            break;
+
+            case F_DUPFD:
+            case F_DUPFD_CLOEXEC:
+            case F_SETFD:
+            case F_SETOWN:
+            case F_SETSIG:
+            case F_SETLEASE:
+            case F_NOTIFY:
+#ifdef F_SETPIPE_SZ
+            case F_SETPIPE_SZ:
+#endif
+            {
+                int arg = va_arg(va, int);    // 从 va 获取标志位。
+                va_end(va);                   // 清理 va。
+                return fcntl_f(fd, cmd, arg); // 调用原始调用。
+            }
+            break;
+
+
+            case F_GETFD:
+            case F_GETOWN:
+            case F_GETSIG:
+            case F_GETLEASE:
+#ifdef F_GETPIPE_SZ
+            case F_GETPIPE_SZ:
+#endif
+            {
+                va_end(va);              // 清理 va 变量。
+                return fcntl_f(fd, cmd); // 返回原始调用的结果。
+            }
+            break;
+
+            // 设置文件锁，如果不能立即获得锁，则返回失败。
+            case F_SETLK:
+            // 设置文件锁，且如果不能立即获得锁，则阻塞等待。
+            case F_SETLKW:
+            // 获取文件锁的状态。如果文件描述符 fd 关联的文件已经被锁定，那么该命令会填充 flock 结构体，指示锁的状态。
+            case F_GETLK:
+            {
+                // 从可变参数列表中获取 struct flock* 类型的指针，这个指针指向一个 flock 结构体，包含锁定操作相关的信息（如锁的类型、偏移量、锁的长度等）。
+                struct flock *arg = va_arg(va, struct flock *);
+                va_end(va);
+                return fcntl_f(fd, cmd, arg);
+            }
+            break;
+
+            // 获取文件描述符 fd 所属的所有者信息。这通常用于与信号处理相关的操作，尤其是在异步 I/O 操作中。
+            case F_GETOWN_EX:
+            // 设置文件描述符 fd 的所有者信息。
+            case F_SETOWN_EX:
+            {
+                // 和上面的思路类似，从可变参数中提取相应类型的结构体指针。
+                struct f_owner_exlock *arg = va_arg(va, struct f_owner_exlock *);
+                va_end(va);
+                return fcntl_f(fd, cmd, arg);
+            }
+            break;
+
+            default:
+                va_end(va);
+                return fcntl_f(fd, cmd);
+        }
+    }
 
     int ioctl(int fd, unsigned long request, ...)
     {
