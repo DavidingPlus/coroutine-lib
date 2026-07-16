@@ -59,6 +59,7 @@ extern "C"
          */
         if (!realStrlen)
         {
+            // dlsym函数的功能就是可以从共享库（动态库）中获取符号（全局变量与函数符号）地址，通常用于获取函数符号地址，这样可用于对共享库中函数的包装。
             realStrlen = reinterpret_cast<strlenFunc>(dlsym(RTLD_NEXT, "strlen"));
 
             if (!realStrlen)
