@@ -71,7 +71,22 @@ void testForward(T &&v)
     print(v);
     // std::move 会无条件将 v 转换为右值引用，所以这里永远调用右值版本。
     print(std::move(v));
+
     // std::forward 会根据 T 保留参数最初的值类别：传入左值 -> 保持左值；传入右值 -> 恢复右值。这就是完美转发。
+
+    // template <typename T>
+    // constexpr T &&myForward(std::remove_reference_t<T> & t)
+    // {
+    //     return static_cast<T &&>(t);
+    // }
+
+    // template <typename T>
+    // constexpr T &&myForward(std::remove_reference_t<T> && t)
+    // {
+    //     static_assert(!std::is_lvalue_reference_v<T>);
+    //     return static_cast<T &&>(t);
+    // }
+
     print(std::forward<T>(v));
 
     std::cout << "======================" << std::endl;
@@ -81,6 +96,36 @@ void testForward(T &&v)
 int main(int argc, char *argv[])
 {
     int x = 1;
-    testForward(x);            // 实参为左值。
+
+    // testForward<int &>(int &v)
+    // std::forward<int &>(v)，这里的 v 已经是左值了，下面同理。
+    // int & && myForward(std::remove_reference_t<int &> & t) -> int & myForward(int & t)，能接受参数 v，并且返回值是左值引用。
+    // return static_cast<int & &&>(t) -> return static_cast<int &>(t) 正确。
+    testForward(x); // 实参为左值。
+
+    // testForward<int>(int &&v)
+    // std::forward<int>(v)
+    // int && myForward(std::remove_reference_t<int> & t) -> int && myForward(int & t)，能接受参数 v，并且返回值是右值引用。
+    // return static_cast<int &&>(t) 正确。
     testForward(std::move(x)); // 实参为右值。
+
+    // testForward<int>(int &&v)
+    // std::forward<int>(v)
+    // int && myForward(std::remove_reference_t<int> & t) -> int && myForward(int & t)，能接受参数 v，并且返回值是右值引用。
+    // return static_cast<int &&>(t) 正确。
+    testForward(1); // 实参为右值。
+
+    // 一般情况就是上面三种，那如果非要 std::forward<int>(1)、std::forward<int &>(1) 甚至 std::forward<int &&>(1) 呢？调用第二个重载。
+
+    // std::forward<int>(1) -> T = int
+    // int && myForward(std::remove_reference_t<int> && t) -> int && myForward(int && t)，能接受参数 1，并且返回值是右值引用。
+    // static_assert(!std::is_lvalue_reference_v<int>); 正确
+    // return static_cast<int &&>(t); 正确
+
+    // std::forward<int &>(1); // 错误的，因为普通左值引用 T& 不能绑定到右值临时对象。
+
+    // std::forward<int &&>(1) -> T = int &&
+    // int && && myForward(std::remove_reference_t<int &&> && t) -> int && myForward(int && t)，能接受参数 1，并且返回值是右值引用。
+    // static_assert(!std::is_lvalue_reference_v<int &&>); 正确
+    // return static_cast<int && &&>(t); -> return static_cast<int &&>(t); 正确
 }
