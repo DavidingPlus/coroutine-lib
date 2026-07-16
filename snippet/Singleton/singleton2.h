@@ -33,6 +33,7 @@ private:
 private:
 
     // 唯一单实例对象指针。类内静态成员变量。
+    // 也可以把原生指针换成智能指针 std::shared_ptr<Singleton2>。
     static Singleton2 *m_singleton2;
 
     static std::mutex m_mutex;
