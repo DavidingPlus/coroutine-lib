@@ -34,9 +34,9 @@ Singleton1 &Singleton1::GetInstance()
     return Singleton1;
 }
 
-void Singleton1::Print()
+void Singleton1::print()
 {
-    std::cout << "Singleton1::Print(): " << this << std::endl;
+    std::cout << "Singleton1::print(): " << this << std::endl;
 }
 
 Singleton1::Singleton1()

@@ -8,7 +8,7 @@ public:
     static Singleton1 &GetInstance();
 
     // 打印实例地址。
-    void Print();
+    void print();
 
 
 private:
