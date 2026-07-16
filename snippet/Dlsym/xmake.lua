@@ -1,6 +1,6 @@
-target("Dlsym-hook")
+target("Dlsym-strlen")
     set_kind("shared")
-    add_files("hook.cpp")
+    add_files("1_strlen.cpp")
     add_syslinks("dl")
 target_end()
 
@@ -11,13 +11,13 @@ target("Dlsym1")
 
     add_runenvs(
         "LD_PRELOAD",
-        "$(projectdir)/build/$(plat)/$(arch)/$(mode)/snippet/libDlsym-hook.so"
+        "$(projectdir)/build/$(plat)/$(arch)/$(mode)/snippet/libDlsym-strlen.so"
     )
 target_end()
 
 target("Dlsym-hello")
     set_kind("shared")
-    add_files("hello.cpp")
+    add_files("2_hello.cpp")
 target_end()
 
 target("Dlsym2")
@@ -32,7 +32,7 @@ target_end()
 
 target("Dlsym-malloc")
     set_kind("shared")
-    add_files("malloc.cpp")
+    add_files("3_malloc.cpp")
 target_end()
 
 target("Dlsym3")
