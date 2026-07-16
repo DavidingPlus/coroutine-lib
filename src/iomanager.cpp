@@ -127,8 +127,8 @@ IOManager::IOManager(size_t threads, bool useCaller, const std::string &name)
     {
         HookEnableGuard guard(false);
         res = fcntl(m_tickleFds[0], F_SETFL, fcntl(m_tickleFds[0], F_GETFL) | O_NONBLOCK);
+        assert(!res);
     }
-    assert(!res);
 
     // 将 m_tickleFds[0] 作为读事件放入到 event 监听集合中。
     res = epoll_ctl(m_epfd, EPOLL_CTL_ADD, m_tickleFds[0], &event);
