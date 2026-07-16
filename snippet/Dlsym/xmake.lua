@@ -29,3 +29,18 @@ target("Dlsym2")
         "$(projectdir)/build/$(plat)/$(arch)/$(mode)/snippet/libDlsym-hello.so"
     )
 target_end()
+
+target("Dlsym-malloc")
+    set_kind("shared")
+    add_files("malloc.cpp")
+target_end()
+
+target("Dlsym3")
+    set_kind("binary")
+    add_files("main3.cpp")
+
+    add_runenvs(
+        "LD_PRELOAD",
+        "$(projectdir)/build/$(plat)/$(arch)/$(mode)/snippet/libDlsym-malloc.so"
+    )
+target_end()
