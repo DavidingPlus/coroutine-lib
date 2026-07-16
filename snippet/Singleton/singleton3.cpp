@@ -15,7 +15,10 @@ std::shared_ptr<Singleton3> Singleton3::GetInstance()
     // 3. 初始化完成后：once_flag 会记录完成状态，后续线程调用 call_once 时会直接跳过初始化函数。
     // 4. 如果初始化函数执行失败（例如抛异常）：本次初始化不会被认为成功，下次调用 call_once 时仍然会重新尝试初始化。
     std::call_once(singleton3Flag, [&]
-                   { singleton3 = std::shared_ptr<Singleton3>(new Singleton3()); });
+                   {
+                       // 这里使用 std::shared_ptr 的一个构造函数重载，第一个参数是指针，第二个参数是删除函数指针。因为 std::shared_ptr 外部无法访问 Singleton3 的私有析构函数。
+                       singleton3 = std::shared_ptr<Singleton3>(new Singleton3(), &Singleton3::DeleteInstance); //
+                   });
 
 
     return singleton3;
@@ -34,4 +37,10 @@ Singleton3::Singleton3()
 Singleton3::~Singleton3()
 {
     std::cout << "Singleton3::~Singleton3()" << std::endl;
+}
+
+void Singleton3::DeleteInstance(Singleton3 *singleton3)
+{
+    delete singleton3;
+    singleton3 = nullptr;
 }

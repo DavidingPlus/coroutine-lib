@@ -1,4 +1,4 @@
-target("Singleton1")
+target("Singleton")
     set_kind("binary")
-    add_files("main1.cpp")
+    add_files("*.cpp")
 target_end()

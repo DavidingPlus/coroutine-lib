@@ -20,6 +20,8 @@ private:
 
     ~Singleton3();
 
+    static void DeleteInstance(Singleton3 *singleton3);
+
     Singleton3(const Singleton3 &Singleton3) = delete;
 
     Singleton3 &operator=(const Singleton3 &Singleton3) = delete;
